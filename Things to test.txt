@@ -1,0 +1,14 @@
+You are asking the right questions. To go from "Good" to "State of the Art" (SOTA) in 2024/2025 for tabular classification on a dataset of this size (~7,000 rows), you need to move beyond standard stacking.Here is the Nuclear Option: a suite of techniques used by Kaggle Grandmasters to squeeze the final 0.01% accuracy out of tabular data.The "Secret Weapons" ListTabPFN (The Game Changer):What is it? A Transformer pre-trained on millions of synthetic datasets. It doesn't "train" on your data; it uses In-Context Learning (like GPT-4 but for numbers) to predict probabilities instantly.Why use it? On datasets with <10,000 rows (like yours), it frequently beats tuned XGBoost/LightGBM out of the box. It is the current SOTA for small tabular data.Denoising Autoencoder (DAE) Features:What is it? A Neural Network trained to clean "corrupted" versions of your data.Why use it? You throw away the output and use the middle layer as new features for your XGBoost/SVM. It captures non-linear relationships that trees miss.MixUp Augmentation:What is it? Instead of adding random noise (which can be harmful), you take two random rows ($Row_A, Row_B$) and blend them: $NewRow = 0.7 \times Row_A + 0.3 \times Row_B$. You also blend the labels.Why use it? It forces the model to learn linear transitions between classes, smoothing the decision boundary significantly.Adversarial Validation:What is it? You train a classifier to distinguish between Train and Test data.Why use it? If this classifier has high accuracy, your Train and Test sets look different (distribution shift). You must drop the features that make them different, or your model will fail on the test set.
+
+
+
+
+
+Why this is SOTA:
+TabPFN Integration: This is the most distinct addition. It operates on a completely different mathematical principle (Transformers/Priors) than Trees (XGB/RF) or Geometry (SVM). This diversity is gold for stacking.
+
+Deep Feature Synthesis: The DAE class learns a compressed representation of your data's manifold. By concatenating X_deep to X, you give the XGBoost/CatBoost models "hints" about the non-linear structure of the data that they couldn't see easily on their own.
+
+CatBoost: We replaced SVM (which is good but often slower/less robust on mixed data) with CatBoost, which naturally handles data shifts better.
+
+Meta-Feature Stacking: We manually implemented the stacking loop to ensure TabPFN sees Raw Features (where it excels) while XGBoost/CatBoost see Raw + Deep Features. This specific routing of data is an advanced technique.
