@@ -29,6 +29,86 @@ Build a K-Nearest Neighbors (KNN) classifier from scratch, find the optimal k va
 - **Key Concepts**: Euclidean Distance, Neighbor Selection, Classification Probability, Model Accuracy, Decision Boundary Visualization.
 - **Constraints**: No library distance functions allowed.
 
+### Part D: Classification Challenge
+Develop a high-performance classification model to predict labels for an unlabeled test dataset with **5 distinct classes**. This part focuses on building a robust, production-quality pipeline that maximizes generalization on unseen data.
+
+#### Datasets
+| File | Description |
+|------|-------------|
+| `datasetTV.csv` | Training/Validation set with ground-truth labels |
+| `datasetTest.csv` | Unlabeled test set (6,955 samples) for final prediction |
+
+#### Pipeline Overview
+The solution follows a **three-phase training pipeline**:
+
+```
+Phase 1: Initial Training    →    Phase 2: Pseudo-Labeling    →    Phase 3: Final Prediction
+     (Augmented TV Data)              (Expand with Test)              (Generate labels1.npy)
+```
+
+---
+
+#### Phase 1: Data Preprocessing & Augmentation
+
+**Feature Scaling:**
+- All features are normalized using `StandardScaler` to ensure zero mean and unit variance.
+- This is critical for distance-based (SVM) and gradient-based (MLP, XGBoost) algorithms.
+
+**Dimensionality Reduction (SVM only):**
+- PCA reduces features to 100 principal components before feeding into the SVM.
+- This speeds up the computationally expensive RBF kernel while retaining most variance.
+
+**Data Augmentation (Gaussian Noise Injection):**
+- The training set is **doubled** by adding copies with small Gaussian noise (σ = 0.05).
+- **Purpose**: Acts as a regularization technique, forcing models to learn smoother decision boundaries and improving robustness to minor input perturbations.
+
+---
+
+#### Phase 2: Stacking Ensemble Architecture
+
+The core of the solution is a **Stacking Classifier** that combines the strengths of four diverse base learners:
+
+| Model | Configuration | Strengths |
+|-------|---------------|-----------|
+| **SVM** | RBF kernel, C=10, PCA(100) | Excellent for complex, non-linear boundaries |
+| **Random Forest** | 300 trees, parallelized | Robust to noise, handles feature interactions |
+| **XGBoost** | 300 estimators, lr=0.05, depth=6 | State-of-the-art gradient boosting, GPU-accelerated |
+| **MLP** | (512, 256) hidden layers, early stopping | Learns abstract representations, captures complex patterns |
+
+**Why Stacking?**
+- Each base model has different inductive biases and error patterns.
+- The **meta-learner** (Logistic Regression) learns *when* to trust each model based on their out-of-fold predictions.
+- Internal 3-fold cross-validation ensures the meta-learner sees unbiased predictions, preventing overfitting.
+
+---
+
+#### Phase 3: Pseudo-Labeling (Semi-Supervised Learning)
+
+After initial training, the model leverages unlabeled test data to refine its decision boundaries:
+
+1. **Predict probabilities** on the entire test set using the trained ensemble.
+2. **Identify high-confidence samples** where `max(probability) ≥ 90%`.
+3. **Treat these as ground truth** and add them to the training set.
+4. **Retrain the entire ensemble** on this expanded dataset.
+
+**Rationale:**
+- This is a form of **transductive learning** — adapting the model to the specific test distribution.
+- High-confidence samples are typically "easy" examples near cluster centers, which help clarify boundaries for ambiguous cases.
+
+**Safeguards Against Overfitting:**
+| Safeguard | How It Helps |
+|-----------|--------------|
+| **90% Confidence Threshold** | Only the most reliable predictions are used, minimizing error propagation |
+| **Stacking with CV** | Internal cross-validation prevents the meta-learner from memorizing training data |
+| **Gaussian Augmentation** | Noise injection regularizes base models and discourages overly sharp boundaries |
+| **Diverse Ensemble** | Errors from one model are often corrected by others, reducing confirmation bias |
+
+---
+
+#### Output
+- **Final predictions** are saved to `labels1.npy` (shape: 6955,).
+- The trained model is persisted to `best_model_stacking_fast_cpu.pkl` for reproducibility.
+
 ## Project Structure
 ```
 MLProject/
