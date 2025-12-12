@@ -3,4 +3,17 @@ venv/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Large model files
 *.pkl
+*.npy
+*.ckpt
+
+# Cache folders
+.cache/
+catboost_info/
+prior/
+
+# IDE
+.idea/
+.vscode/

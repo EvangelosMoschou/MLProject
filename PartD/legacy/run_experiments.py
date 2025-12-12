@@ -4,6 +4,15 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split, cross_val_score
 from sklearn.ensemble import RandomForestClassifier
+# Monkeypatch torch.load for TabPFN compatibility with modern PyTorch
+import torch
+location = torch.load
+def safe_load(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return location(*args, **kwargs)
+torch.load = safe_load
+
 from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.pipeline import Pipeline
@@ -23,12 +32,18 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.decomposition import PCA
 from sklearn.svm import SVC
 import xgboost as xgb
+from catboost import CatBoostClassifier
 
+# FORCE GPU Usage as requested
+USE_GPU = True 
 try:
-    import cuml
-    USE_GPU = True
+    import torch
+    if torch.cuda.is_available():
+        print(f"✅ GPU Detected: {torch.cuda.get_device_name(0)}")
+    else:
+        print("⚠️ GPU requested but torch.cuda.is_not_available(). Trying anyway...")
 except ImportError:
-    USE_GPU = False
+    pass
 
 def get_svm_model():
     """Returns SVM Pipeline (Optimized CPU)."""
@@ -66,6 +81,24 @@ def get_xgb_model():
         ('xgb', xgb.XGBClassifier(**params))
     ])
 
+def get_catboost_model():
+    """Returns CatBoost Pipeline (GPU if available)."""
+    params = {
+        'iterations': 500,
+        'learning_rate': 0.05,
+        'depth': 6,
+        'loss_function': 'Logloss',
+        'verbose': 0,
+        'random_seed': 42
+    }
+    if USE_GPU:
+        params.update({'task_type': 'GPU', 'devices': '0'})
+        
+    return Pipeline([
+        ('scaler', StandardScaler()), # CatBoost doesn't strictly need this but good for consistency
+        ('cat', CatBoostClassifier(**params))
+    ])
+
 def get_mlp_model():
     """Returns MLP Pipeline (Deep Architecture)."""
     return Pipeline([
@@ -83,6 +116,7 @@ def get_stacking_ensemble():
         ('svm', get_svm_model()), 
         ('rf', get_rf_model()), 
         ('xgb', get_xgb_model()), 
+        ('cat', get_catboost_model()),
         ('mlp', get_mlp_model())
     ]
     
@@ -134,7 +168,7 @@ def run_baseline_experiment(X, y, cv_folds=5):
         metrics={'accuracy': avg_acc, 'log_loss': avg_ll, 'runtime_seconds': runtime}
     )
 
-def run_tabpfn_experiment(X, y, cv_folds=5, n_ensemble=1):
+def run_tabpfn_experiment(X, y, cv_folds=5, n_ensemble=8):
     """Runs TabPFN experiment."""
     print(f"--- Running TabPFN Experiment ---")
     try:
@@ -148,30 +182,20 @@ def run_tabpfn_experiment(X, y, cv_folds=5, n_ensemble=1):
     
     start_time = time.time()
     
-    # n_estimators=1 is faster for smoke test, higher for performance
-    classifier = TabPFNClassifier(device='cpu', n_estimators=n_ensemble) 
+    # n_estimators controls compute time/accuracy for v6.0.6 (latest)
+    # Using 'cuda' device as requested
+    classifier = TabPFNClassifier(device='cuda' if USE_GPU else 'cpu', n_estimators=n_ensemble) 
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        # TabPFN can be slow on large data, maybe subsample for quick check? 
-        # For now, using full data as it represents true performance.
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
         
-        # TabPFN expects unscaled data usually, but works with simple scaling too.
-        # It's robust.
-        
-        try:
-            classifier.fit(X_train, y_train)
-            y_eval = classifier.predict(X_val)
-            acc = accuracy_score(y_val, y_eval)
-            accuracies.append(acc)
-            print(f"Fold {fold+1}: Acc={acc:.4f}")
-        except RuntimeError as e:
-            print(f"❌ TabPFN Runtime Error (likely Auth): {e}")
-            return
-        except Exception as e:
-            print(f"❌ TabPFN Error: {e}")
-            return
+        # TabPFN
+        classifier.fit(X_train, y_train)
+        y_eval = classifier.predict(X_val)
+        acc = accuracy_score(y_val, y_eval)
+        accuracies.append(acc)
+        print(f"Fold {fold+1}: Acc={acc:.4f}")
         
     avg_acc = np.mean(accuracies)
     runtime = time.time() - start_time
@@ -180,7 +204,7 @@ def run_tabpfn_experiment(X, y, cv_folds=5, n_ensemble=1):
     
     log_to_history(
         experiment_name='TabPFN',
-        params={'model_params': f'TabPFN(N_ensemble={n_ensemble})', 'cv_folds': cv_folds},
+        params={'model_params': f'TabPFN(n_estimators={n_ensemble})', 'cv_folds': cv_folds},
         metrics={'accuracy': avg_acc, 'runtime_seconds': runtime}
     )
 
@@ -239,11 +263,8 @@ def run_dae_experiment(X, y, cv_folds=5):
         X_train_aug = np.vstack((X_train, X_train_noisy))
         y_train_aug = np.hstack((y_train, y_train))
         
-        # Train
-        clf = Pipeline([
-            ('scaler', StandardScaler()),
-            ('rf', RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
-        ])
+        # Train (Using Stacking Ensemble)
+        clf = get_stacking_ensemble()
         
         clf.fit(X_train_aug, y_train_aug)
         
@@ -296,11 +317,8 @@ def run_mixup_experiment(X, y, cv_folds=5):
         X_train_aug = np.vstack((X_train, np.array(X_mix)))
         y_train_aug = np.hstack((y_train, np.array(y_mix)))
         
-        # Train
-        clf = Pipeline([
-            ('scaler', StandardScaler()),
-            ('rf', RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
-        ])
+        # Train (Using Stacking Ensemble)
+        clf = get_stacking_ensemble()
         
         clf.fit(X_train_aug, y_train_aug)
         
@@ -376,7 +394,7 @@ def main():
         run_baseline_experiment(X, y_enc, cv_folds=args.cv)
         
     if args.exp in ['tabpfn', 'all']:
-        run_tabpfn_experiment(X, y_enc, cv_folds=args.cv, n_ensemble=1) 
+        run_tabpfn_experiment(X, y_enc, cv_folds=args.cv, n_ensemble=32) 
     
     if args.exp in ['adv_val', 'all']:
         if X_test is not None:
