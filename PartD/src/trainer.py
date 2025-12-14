@@ -239,6 +239,54 @@ def run_mixup_experiment(X, y, cv_folds=5):
 
 
 
+def run_calibration_experiment(X, y, cv_folds=5):
+    """
+    Evaluates if CalibratedClassifierCV improves model probability estimates.
+    """
+    print(f"--- Running Ensemble Calibration Experiment ---")
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.metrics import log_loss
+    
+    skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+    
+    scores_raw = []
+    scores_cal = []
+    
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        # Base Model (Strong Stack)
+        clf = get_stacking_ensemble()
+        clf.fit(X_train, y_train)
+        probs_raw = clf.predict_proba(X_val)
+        loss_raw = log_loss(y_val, probs_raw)
+        scores_raw.append(loss_raw)
+        
+        # Calibrated Model (Isotonic = Non-parametric)
+        # Note: 'isotonic' requires > 1000 samples usually, which we have.
+        cal_clf = CalibratedClassifierCV(clf, method='isotonic', cv='prefit') 
+        # Using 'prefit' is wrong here because we just trained 'clf' on X_train. 
+        # Ideally we need a holdout set for calibration.
+        # Let's use standard CV calibration (internal splits)
+        
+        cal_clf_cv = CalibratedClassifierCV(get_stacking_ensemble(), method='isotonic', cv=3)
+        cal_clf_cv.fit(X_train, y_train)
+        probs_cal = cal_clf_cv.predict_proba(X_val)
+        loss_cal = log_loss(y_val, probs_cal)
+        scores_cal.append(loss_cal)
+        
+        print(f"Fold {fold+1}: Raw LL={loss_raw:.4f}, Calibrated LL={loss_cal:.4f}")
+        
+    avg_raw = np.mean(scores_raw)
+    avg_cal = np.mean(scores_cal)
+    
+    print(f"Calibration Results (Log Loss): Raw={avg_raw:.4f}, Calibrated={avg_cal:.4f}")
+    if avg_cal < avg_raw:
+        print("✅ Calibration Improved Performance!")
+    else:
+        print("❌ Calibration Hurnt Performance (or Neutral).")
+
 def run_optuna_tuning(X, y, n_trials=30, cv_folds=5):
     """Runs Optuna hyperparameter tuning for XGBoost and CatBoost on GPU."""
     print(f"--- Running Optuna Tuning ---")

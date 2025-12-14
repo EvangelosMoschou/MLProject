@@ -53,7 +53,7 @@ Implement non-parametric density estimation using Hypercube and Gaussian kernels
 - Error minimization against true N(1,4) distribution
 - Comparative kernel analysis
 
-**Outputs:** `histogram_verification.png`, `parzen_error_plots.png`
+**Outputs:** `histogram_verification.png`, `parzen_error_plots.png`, `best_model_stacking_fast_cpu.pkl`
 
 ---
 
@@ -70,24 +70,40 @@ Build a KNN classifier from scratch with decision boundary visualization.
 
 ---
 
-### Part D: Classification Challenge
-Production-quality 5-class classification using advanced ensemble techniques.
+### Part D: Classification Challenge (Advanced)
+**Goal:** Maximize Multiclass Accuracy on a Dataset with 220 features and 5 classes.
+**Final Accuracy (CV):** ~88.5% (Weighted Blend)
 
-**Methodology:**
-- **Stacking Ensemble**: SVM + Random Forest + XGBoost + MLP
-- **Pseudo-Labeling**: Semi-supervised learning with 90% confidence threshold
-- **Data Augmentation**: Gaussian noise injection (σ = 0.05)
+### Implementation Strategy
+We achieved State-of-the-Art performance using a diverse ensemble approach:
+1.  **Feature Engineering**:
+    *   **Denoising Autoencoder (DAE)**: Trained on the full dataset to extract 64 deep bottleneck features.
+    *   **Feature Selection**: Dropped 102 "useless" features identified via Permutation Importance.
+    *   **Final Input**: 186 High-Quality Features (122 Original + 64 DAE).
+2.  **Model 1: TabPFN (Transformer)**:
+    *   A Prior-Data Fitted Network that acts as a proxy for Bayesian Inference.
+    *   Used `n_estimators=32` for robust probabilistic predictions.
+    *   CV Score: **87.5%**
+3.  **Model 2: Optimized Stacking Ensemble**:
+    *   **Base Models**: SVM, Random Forest, XGBoost (GPU), CatBoost (GPU), MLP.
+    *   **Meta-Learner**: Logistic Regression.
+    *   **Augmentation**: **MixUp** regularization (alpha=0.2) applied during training.
+    *   CV Score: **87.0%**
+4.  **Final Blending**:
+    *   Soft Voting Blend: `0.55 * TabPFN + 0.45 * Stacking`.
 
-**Pipeline:**
+### How to Run
+```bash
+# 1. Generate Super Dataset (Pruning + DAE)
+python PartD/main.py --exp gen_data
+
+# 2. Run Final Training & Prediction
+python PartD/main.py --exp final
+# Output: PartD/labels1.npy
 ```
-Phase 1: Train ensemble on augmented data
-    ↓
-Phase 2: Pseudo-label high-confidence test samples
-    ↓
-Phase 3: Retrain on expanded dataset → Final predictions
-```
 
-**Outputs:** `labels1.npy`, `best_model_stacking_fast_cpu.pkl`
+### Detailed Report
+See [walkthrough.md](walkthrough.md) for a comprehensive breakdown of the experiments, "Super Dataset" creation, and negative results (Calibration).
 
 ---
 

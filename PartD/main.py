@@ -57,5 +57,17 @@ def main():
 
 
 
+    if args.exp in ['calib', 'all']:
+        from src.trainer import run_calibration_experiment
+        run_calibration_experiment(X, y_enc, cv_folds=args.cv)
+
+    if args.exp in ['gen_data', 'all']:
+        from src.generate_dataset import generate_super_dataset
+        generate_super_dataset()
+
+    if args.exp in ['final', 'all']:
+        from src.final_run import run_final_submission
+        run_final_submission()
+
 if __name__ == "__main__":
     main()
