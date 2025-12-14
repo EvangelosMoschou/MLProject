@@ -10,12 +10,13 @@ from src.trainer import (
     run_mixup_experiment, 
     run_optuna_tuning
 )
+from src.feature_selection import run_feature_selection
 
 warnings.filterwarnings('ignore')
 
 def main():
     parser = argparse.ArgumentParser(description='Run ML Experiments (Refactored)')
-    parser.add_argument('--exp', type=str, default='all', help='Experiment to run: baseline, tabpfn, adv_val, dae, mixup, optuna, all')
+    parser.add_argument('--exp', type=str, default='all', help='Experiment to run: baseline, tabpfn, adv_val, dae, mixup, optuna, feat_sel, all')
     parser.add_argument('--cv', type=int, default=5, help='Number of CV folds')
     args = parser.parse_args()
     
@@ -45,7 +46,16 @@ def main():
         run_mixup_experiment(X, y_enc, cv_folds=args.cv)
         
     if args.exp in ['optuna', 'all']:
-        run_optuna_tuning(X, y_enc, n_trials=10, cv_folds=3)
+        run_optuna_tuning(X, y_enc, n_trials=30, cv_folds=args.cv)
+
+    if args.exp in ['optuna', 'all']:
+        run_optuna_tuning(X, y_enc, n_trials=30, cv_folds=args.cv)
+
+    if args.exp in ['feat_sel', 'all']:
+        run_feature_selection(X, y_enc)
+
+
+
 
 if __name__ == "__main__":
     main()

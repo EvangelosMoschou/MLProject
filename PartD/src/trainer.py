@@ -130,8 +130,15 @@ def run_adversarial_validation(X, y, X_test):
     )
 
 def run_dae_experiment(X, y, cv_folds=5):
-    """Runs experiment using Denoising Autoencoder features (Proxied via Noise Augmentation)."""
-    print(f"--- Running DAE Experiment (Augmentation Inside Fold) ---")
+    """Runs experiment using REAL Denoising Autoencoder features + Original features."""
+    print(f"--- Running DAE Experiment (Deep Feature Extraction) ---")
+    
+    # Import DAE here to avoid circular imports if any
+    try:
+        from .dae_model import train_dae, get_dae_features
+    except ImportError as e:
+        print(f"❌ DAE Import Failed: {e}")
+        return
     
     skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
     accuracies = []
@@ -142,30 +149,37 @@ def run_dae_experiment(X, y, cv_folds=5):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
         
-        # Apply Augmentation ONLY to Training Data
-        noise_level = 0.05
-        X_train_noisy = X_train + np.random.normal(0, noise_level, X_train.shape)
-        X_train_aug = np.vstack((X_train, X_train_noisy))
-        y_train_aug = np.hstack((y_train, y_train))
+        # 1. Train DAE on X_train (Unsupervised)
+        dae = train_dae(X_train, epochs=30)
         
-        # Train (Using Stacking Ensemble)
+        # 2. Extract DAE Features
+        print(f"Extracting DAE features for Fold {fold+1}...")
+        train_features = get_dae_features(dae, X_train)
+        val_features = get_dae_features(dae, X_val)
+        
+        # 3. Concatenate (Original + DAE Features)
+        X_train_aug = np.hstack((X_train, train_features))
+        X_val_aug = np.hstack((X_val, val_features))
+        
+        # 4. Train Stacking Ensemble on Augmented Data
+        # Ensure we use a robust model that handles many features
         clf = get_stacking_ensemble()
         
-        clf.fit(X_train_aug, y_train_aug)
+        clf.fit(X_train_aug, y_train)
         
-        # Evaluate on clean Validation Data
-        acc = accuracy_score(y_val, clf.predict(X_val))
+        # Evaluate
+        acc = accuracy_score(y_val, clf.predict(X_val_aug))
         accuracies.append(acc)
         print(f"Fold {fold+1}: Acc={acc:.4f}")
         
     avg_acc = np.mean(accuracies)
     runtime = time.time() - start_time
     
-    print(f"DAE (Noise Aug) Results: Avg Acc={avg_acc:.4f}, Runtime={runtime:.2f}s")
+    print(f"DAE (Real Features) Results: Avg Acc={avg_acc:.4f}, Runtime={runtime:.2f}s")
     
     log_to_history(
-        experiment_name='DAE-Proxy-NoiseAug-Corrected',
-        params={'model_params': 'RF-Augmented', 'noise': 0.05},
+        experiment_name='DAE-DeepFeatures',
+        params={'model_params': 'Stacking+DAE(64-dim)', 'epochs': 30},
         metrics={'accuracy': avg_acc, 'runtime_seconds': runtime}
     )
 
@@ -223,39 +237,94 @@ def run_mixup_experiment(X, y, cv_folds=5):
         metrics={'accuracy': avg_acc, 'runtime_seconds': runtime}
     )
 
-def run_optuna_tuning(X, y, n_trials=20, cv_folds=3):
-    """Runs Optuna hyperparameter tuning for Random Forest."""
+
+
+def run_optuna_tuning(X, y, n_trials=30, cv_folds=5):
+    """Runs Optuna hyperparameter tuning for XGBoost and CatBoost on GPU."""
     print(f"--- Running Optuna Tuning ---")
     try:
         import optuna
-    except ImportError:
-        print("❌ Optuna not installed. Skipping.")
+        import xgboost as xgb
+        from catboost import CatBoostClassifier
+    except ImportError as e:
+        print(f"❌ Dependencies missing for tuning: {e}")
         return
 
-    def objective(trial):
-        n_estimators = trial.suggest_int('n_estimators', 50, 300)
-        max_depth = trial.suggest_int('max_depth', 5, 30)
-        min_samples_split = trial.suggest_int('min_samples_split', 2, 10)
+    from .config import USE_GPU
+    
+    # Check GPU
+    import torch
+    GPU_AVAILABLE = USE_GPU and torch.cuda.is_available()
+    if GPU_AVAILABLE:
+        print("✅ GPU Tuning Enabled")
+    else:
+        print("⚠️ GPU not found. Tuning will be slow on CPU.")
+
+    # --- XGBoost Objective ---
+    def objective_xgb(trial):
+        params = {
+            'n_estimators': trial.suggest_int('n_estimators', 200, 1000),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'max_depth': trial.suggest_int('max_depth', 3, 10),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+            'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            'eval_metric': 'mlogloss',
+            'random_state': 42,
+            'verbosity': 0
+        }
         
-        clf = RandomForestClassifier(
-            n_estimators=n_estimators, 
-            max_depth=max_depth,
-            min_samples_split=min_samples_split,
-            random_state=42, 
-            n_jobs=-1
-        )
-        
-        # Fast CV for tuning
+        if GPU_AVAILABLE:
+            params.update({'device': 'cuda', 'tree_method': 'hist'})
+            
+        clf = xgb.XGBClassifier(**params)
         score = cross_val_score(clf, X, y, cv=cv_folds, scoring='accuracy').mean()
         return score
 
-    study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=n_trials)
-    
-    print(f"Best trial: {study.best_trial.params}")
+    # --- CatBoost Objective ---
+    def objective_cat(trial):
+        params = {
+            'iterations': trial.suggest_int('iterations', 500, 1500),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'depth': trial.suggest_int('depth', 4, 10),
+            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 10),
+            'border_count': trial.suggest_int('border_count', 32, 255),
+            'loss_function': 'MultiClass',
+            'verbose': 0,
+            'random_seed': 42
+        }
+        
+        if GPU_AVAILABLE:
+            params.update({'task_type': 'GPU', 'devices': '0'})
+
+        clf = CatBoostClassifier(**params)
+        score = cross_val_score(clf, X, y, cv=cv_folds, scoring='accuracy').mean()
+        return score
+
+    # 1. Tune XGBoost
+    print("\n⚡ Tuning XGBoost...")
+    study_xgb = optuna.create_study(direction='maximize')
+    study_xgb.optimize(objective_xgb, n_trials=n_trials)
+    print(f"🏆 Best XGBoost Params: {study_xgb.best_trial.params}")
+    print(f"   Best Acc: {study_xgb.best_value:.4f}")
     
     log_to_history(
-        experiment_name='Optuna-Tuning-RF',
-        params={'best_params': study.best_trial.params, 'n_trials': n_trials},
-        metrics={'best_accuracy': study.best_value}
+        experiment_name='Optuna-XGB-GPU',
+        params={'best_params': study_xgb.best_trial.params},
+        metrics={'best_accuracy': study_xgb.best_value}
     )
+
+    # 2. Tune CatBoost
+    print("\n⚡ Tuning CatBoost...")
+    study_cat = optuna.create_study(direction='maximize')
+    study_cat.optimize(objective_cat, n_trials=n_trials)
+    print(f"🏆 Best CatBoost Params: {study_cat.best_trial.params}")
+    print(f"   Best Acc: {study_cat.best_value:.4f}")
+
+    log_to_history(
+        experiment_name='Optuna-CatBoost-GPU',
+        params={'best_params': study_cat.best_trial.params},
+        metrics={'best_accuracy': study_cat.best_value}
+    )
+    
+    print("\n✅ Tuning Complete. Please update src/models.py with these values.")

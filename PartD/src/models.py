@@ -39,9 +39,12 @@ def get_rf_model():
 def get_xgb_model():
     """Returns XGBoost Pipeline (GPU if available)."""
     params = {
-        'n_estimators': 300, 
-        'learning_rate': 0.05, 
-        'max_depth': 6, 
+        'n_estimators': 487, 
+        'learning_rate': 0.029, 
+        'max_depth': 9, 
+        'min_child_weight': 3,
+        'subsample': 0.585,
+        'colsample_bytree': 0.998,
         'n_jobs': -1, 
         'random_state': 42, 
         'eval_metric': 'mlogloss',
@@ -59,9 +62,11 @@ def get_xgb_model():
 def get_catboost_model():
     """Returns CatBoost Pipeline (GPU if available)."""
     params = {
-        'iterations': 500,
-        'learning_rate': 0.05,
-        'depth': 6,
+        'iterations': 931,
+        'learning_rate': 0.263,
+        'depth': 8,
+        'l2_leaf_reg': 9.48,
+        'border_count': 100,
         'loss_function': 'MultiClass',
         'verbose': 0,
         'random_seed': 42
