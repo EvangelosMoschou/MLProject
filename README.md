@@ -72,7 +72,7 @@ Build a KNN classifier from scratch with decision boundary visualization.
 
 ### Part D: Classification Challenge (Advanced)
 **Goal:** Maximize Multiclass Accuracy on a Dataset with 220 features and 5 classes.
-**Final Accuracy (CV):** ~88.5% (Weighted Blend)
+**Final Accuracy (Hold-out):** **88.45%** (Verified on 20% validation split)
 
 ### Implementation Strategy
 We achieved State-of-the-Art performance using a diverse ensemble approach:

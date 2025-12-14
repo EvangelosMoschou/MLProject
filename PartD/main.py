@@ -69,5 +69,9 @@ def main():
         from src.final_run import run_final_submission
         run_final_submission()
 
+    if args.exp == 'eval':
+        from src.evaluate_final import run_final_evaluation
+        run_final_evaluation()
+
 if __name__ == "__main__":
     main()
