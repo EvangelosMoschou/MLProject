@@ -52,6 +52,11 @@ def generate_super_dataset():
         X_pruned = X
         X_test_pruned = X_test
         
+    # Persist pruned-only view for TabPFN / diversity experiments
+    pruned_path = 'PartD/outputs/dataset_pruned.npz'
+    np.savez(pruned_path, X=X_pruned, y=y, X_test=X_test_pruned)
+    print(f"✅ Saved pruned dataset to {pruned_path}")
+
     # 3. Train DAE on ALL data (Train + Test) for best unsupervised learning
     X_all = np.vstack((X_pruned, X_test_pruned))
     

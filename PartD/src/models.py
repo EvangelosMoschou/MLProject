@@ -11,12 +11,10 @@ from .config import USE_GPU
 
 # Make GPU check visible
 try:
-    import torch
-    if USE_GPU and torch.cuda.is_available():
-        GPU_AVAILABLE = True
-    else:
-        GPU_AVAILABLE = False
-except ImportError:
+    import subprocess
+    subprocess.check_call(['nvidia-smi'])
+    GPU_AVAILABLE = True
+except (ImportError, FileNotFoundError, subprocess.CalledProcessError):
     GPU_AVAILABLE = False
 
 def get_svm_model():
@@ -31,10 +29,7 @@ def get_svm_model():
 
 def get_rf_model():
     """Returns Random Forest Pipeline (CPU)."""
-    return Pipeline([
-        ('scaler', StandardScaler()), 
-        ('rf', RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42))
-    ])
+    return RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42)
 
 def get_xgb_model():
     """Returns XGBoost Pipeline (GPU if available)."""
@@ -54,10 +49,7 @@ def get_xgb_model():
         params.update({'device': 'cuda', 'tree_method': 'hist'})
         print("⚡ XGBoost using GPU")
         
-    return Pipeline([
-        ('scaler', StandardScaler()), 
-        ('xgb', xgb.XGBClassifier(**params))
-    ])
+    return xgb.XGBClassifier(**params)
 
 def get_catboost_model():
     """Returns CatBoost Pipeline (GPU if available)."""
@@ -75,10 +67,7 @@ def get_catboost_model():
         params.update({'task_type': 'GPU', 'devices': '0'})
         print("⚡ CatBoost using GPU")
         
-    return Pipeline([
-        ('scaler', StandardScaler()), # CatBoost doesn't strictly need this but good for consistency
-        ('cat', CatBoostClassifier(**params))
-    ])
+    return CatBoostClassifier(**params)
 
 def get_mlp_model():
     """Returns MLP Pipeline (Deep Architecture)."""
@@ -91,6 +80,21 @@ def get_mlp_model():
                             random_state=42))
     ])
 
+def get_resnet_model():
+    """Returns ResNet Pipeline (GPU if available)."""
+    # Import locally to avoid circular dependencies if any, though likely safe globally
+    from .resnet_model import ResNetClassifier
+    return Pipeline([
+        ('scaler', StandardScaler()),
+        ('resnet', ResNetClassifier(
+            hidden_dim=256, 
+            num_blocks=2, 
+            dropout=0.2, 
+            epochs=30, 
+            batch_size=128
+        ))
+    ])
+
 def get_stacking_ensemble():
     """Constructs the Stacking Classifier."""
     estimators = [
@@ -98,13 +102,20 @@ def get_stacking_ensemble():
         ('rf', get_rf_model()), 
         ('xgb', get_xgb_model()), 
         ('cat', get_catboost_model()),
-        ('mlp', get_mlp_model())
+        ('mlp', get_mlp_model()),
+        ('resnet', get_resnet_model())
     ]
     
     stacking_clf = StackingClassifier(
         estimators=estimators,
-        final_estimator=LogisticRegression(),
-        cv=3, 
-        n_jobs=1 
+        final_estimator=LogisticRegression(
+            multi_class='multinomial',
+            max_iter=5000,
+            C=1.0,
+            solver='lbfgs'
+        ),
+        cv=5,
+        passthrough=True,
+        n_jobs=1
     )
     return stacking_clf

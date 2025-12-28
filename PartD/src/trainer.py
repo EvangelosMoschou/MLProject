@@ -9,13 +9,18 @@ from .utils import log_to_history, evaluate_model
 from .config import USE_GPU
 
 # --- TabPFN / PyTorch Monkeypatch ---
-import torch
-location = torch.load
-def safe_load(*args, **kwargs):
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
-    return location(*args, **kwargs)
-torch.load = safe_load
+# --- TabPFN / PyTorch Monkeypatch ---
+try:
+    import torch
+    TORCH_AVAILABLE = True
+    location = torch.load
+    def safe_load(*args, **kwargs):
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return location(*args, **kwargs)
+    torch.load = safe_load
+except ImportError:
+    TORCH_AVAILABLE = False
 
 def run_baseline_experiment(X, y, cv_folds=5):
     """Runs a baseline Random Forest experiment."""
