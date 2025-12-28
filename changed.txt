@@ -1,8 +1,0 @@
-Changes made (two-view ensemble + datasets)
-
-- Added pruned-only dataset export in `PartD/src/generate_dataset.py` (saves `PartD/outputs/dataset_pruned.npz`).
-- Updated `PartD/src/final_run.py` to:
-  * Train TabPFN on pruned features; train Stacking on DAE-augmented super features.
-  * Use OOF blender that consumes both views; cache TabPFN preds as `tabpfn_final_probs_pruned.npy`.
-  * Preserve label mapping via `LabelEncoder` and save labels in original space.
-- Updated `PartD/src/evaluate_final.py` to validate with the same two-view setup (TabPFN=pruned, Stack=super) and OOF blender.
