@@ -3,15 +3,13 @@
 > **Pattern Recognition & Machine Learning** — 2025-2026  
 > Author: Evangelos Moschou
 
-📘 **[Read the detailed implementation guide →](IMPLEMENTATION.md)**
-
 ---
 
 ## Quick Start
 
 ### Requirements
 ```bash
-pip install numpy matplotlib scipy pandas nbformat ipykernel xgboost scikit-learn joblib plotly
+pip install numpy matplotlib scipy pandas xgboost scikit-learn catboost tabpfn torch sentence-transformers
 ```
 
 ### Running the Code
@@ -25,8 +23,13 @@ cd PartB && python solution_b.py
 # Part C: K-Nearest Neighbors Classifier
 cd PartC && python solution_c.py
 
-# Part D: Classification Challenge
-cd PartD && python solution_d.py
+# Part D: Classification Challenge (Standard)
+python PartD/main.py --exp final
+
+# Part D: Advanced SOTA Solutions
+python PartD/solution_god_mode.py      # Mamba + KAN + Diffusion
+python PartD/solution_singularity.py   # RF-GNN + LLM Context
+python PartD/solution_universal.py     # TabR + TTA + TabPFN
 ```
 
 ---
@@ -53,7 +56,7 @@ Implement non-parametric density estimation using Hypercube and Gaussian kernels
 - Error minimization against true N(1,4) distribution
 - Comparative kernel analysis
 
-**Outputs:** `histogram_verification.png`, `parzen_error_plots.png`, `best_model_stacking_fast_cpu.pkl`
+**Outputs:** `histogram_verification.png`, `parzen_error_plots.png`
 
 ---
 
@@ -71,39 +74,33 @@ Build a KNN classifier from scratch with decision boundary visualization.
 ---
 
 ### Part D: Classification Challenge (Advanced)
-**Goal:** Maximize Multiclass Accuracy on a Dataset with 220 features and 5 classes.
-**Final Accuracy (Hold-out):** **88.45%** (Verified on 20% validation split)
+**Goal:** Maximize Multiclass Accuracy on a Dataset with 224 features and 5 classes.
 
-### Implementation Strategy
-We achieved State-of-the-Art performance using a diverse ensemble approach:
-1.  **Feature Engineering**:
-    *   **Denoising Autoencoder (DAE)**: Trained on the full dataset to extract 64 deep bottleneck features.
-    *   **Feature Selection**: Dropped 102 "useless" features identified via Permutation Importance.
-    *   **Final Input**: 186 High-Quality Features (122 Original + 64 DAE).
-2.  **Model 1: TabPFN (Transformer)**:
-    *   A Prior-Data Fitted Network that acts as a proxy for Bayesian Inference.
-    *   Used `n_estimators=32` for robust probabilistic predictions.
-    *   CV Score: **87.5%**
-3.  **Model 2: Optimized Stacking Ensemble**:
-    *   **Base Models**: SVM, Random Forest, XGBoost (GPU), CatBoost (GPU), MLP.
-    *   **Meta-Learner**: Logistic Regression.
-    *   **Augmentation**: **MixUp** regularization (alpha=0.2) applied during training.
-    *   CV Score: **87.0%**
-4.  **Final Blending**:
-    *   Soft Voting Blend: `0.55 * TabPFN + 0.45 * Stacking`.
+#### Standard Pipeline
+- **Feature Engineering**: DAE + Feature Selection
+- **Models**: TabPFN + Stacking Ensemble (XGBoost, CatBoost, SVM, RF, MLP)
+- **Blending**: Weighted average optimized via Hill Climbing
+
+#### Advanced SOTA Solutions
+
+| Solution | Architecture | Target |
+|----------|-------------|--------|
+| **God-Mode** | TabM (Mamba) + KAN + Diffusion | >95% |
+| **Singularity** | RF-GNN + LLM Context + Nelder-Mead | >93% |
+| **Universal** | TabR (Retrieval) + TTA + TabPFN | >92% |
 
 ### How to Run
 ```bash
-# 1. Generate Super Dataset (Pruning + DAE)
-python PartD/main.py --exp gen_data
+# Standard Pipeline
+python PartD/main.py --exp gen_data  # Generate Super Dataset
+python PartD/main.py --exp final     # Train & Predict
 
-# 2. Run Final Training & Prediction
-python PartD/main.py --exp final
-# Output: PartD/labels1.npy
+# Advanced Solutions (Requires ml_god_mode environment)
+conda activate ml_god_mode
+python PartD/solution_god_mode.py
+python PartD/solution_singularity.py
+python PartD/solution_universal.py
 ```
-
-### Detailed Report
-See [walkthrough.md](walkthrough.md) for a comprehensive breakdown of the experiments, "Super Dataset" creation, and negative results (Calibration).
 
 ---
 
@@ -112,23 +109,20 @@ See [walkthrough.md](walkthrough.md) for a comprehensive breakdown of the experi
 MLProject/
 ├── Datasets/              # Data files (gitignored)
 ├── PartA/                 # MLE Implementation
-│   ├── solution_a.py
-│   └── [outputs]
 ├── PartB/                 # Parzen Window Implementation
-│   ├── solution_b.py
-│   └── [outputs]
 ├── PartC/                 # KNN Implementation
-│   ├── solution_c.py
-│   └── [outputs]
 ├── PartD/                 # Classification Challenge
-│   ├── solution_d.py
-│   └── labels1.npy
+│   ├── main.py            # Standard pipeline entry
+│   ├── solution_god_mode.py      # Mamba + KAN
+│   ├── solution_singularity.py   # RF-GNN + LLM
+│   ├── solution_universal.py     # TabR + TTA
+│   └── src/               # Core modules
 ├── Submission/            # Final Deliverables
 │   ├── Team1-AC.ipynb
 │   ├── Team1-D.ipynb
 │   └── labels1.npy
-├── README.md              # This file (quick start)
-└── IMPLEMENTATION.md      # Detailed technical documentation
+├── README.md              # This file
+└── walkthrough.md         # Detailed experiment log
 ```
 
 ---
@@ -138,21 +132,9 @@ MLProject/
 | Part | Constraint | Highlight |
 |------|-----------|-----------|
 | **A** | No library MLE | Vectorized operations, 100x faster than loops |
-| **B** | Custom kernels | Broadcasting for O(M×N) pairwise distance computation |
+| **B** | Custom kernels | Broadcasting for O(M×N) pairwise distance |
 | **C** | No library distances | Z-score normalization prevents feature dominance |
-| **D** | Production-ready | Stacking + Pseudo-Labeling achieves 87-94% accuracy |
-
----
-
-## Documentation
-
-For detailed explanations of:
-- Mathematical derivations (e.g., MLE formulas, Parzen window theory)
-- Code walkthroughs (line-by-line explanations)
-- Design decisions (why specific algorithms/parameters)
-- Performance optimizations (vectorization, GPU acceleration)
-
-**See:** [IMPLEMENTATION.md](IMPLEMENTATION.md)
+| **D** | SOTA | Multi-architecture ensemble (Mamba, KAN, GNN, TabPFN) |
 
 ---
 
