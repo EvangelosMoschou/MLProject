@@ -1,125 +1,142 @@
 # MLProject
 
-## Requirements
-The following packages are required to run the project:
-- `numpy`
-- `matplotlib`
-- `scipy`
-- `pandas`
-- `nbformat`
-- `ipykernel`
+> **Pattern Recognition & Machine Learning** — 2025-2026  
+> Author: Evangelos Moschou
 
-## Project Parts
+---
+
+## Quick Start
+
+### Requirements
+```bash
+pip install numpy matplotlib scipy pandas xgboost scikit-learn catboost tabpfn torch sentence-transformers
+```
+
+### Running the Code
+```bash
+# Part A: Maximum Likelihood Estimation
+cd PartA && python solution_a.py
+
+# Part B: Parzen Window Density Estimation
+cd PartB && python solution_b.py
+
+# Part C: K-Nearest Neighbors Classifier
+cd PartC && python solution_c.py
+
+# Part D: Classification Challenge (Standard)
+python PartD/main.py --exp final
+
+# Part D: Advanced SOTA Solutions
+python PartD/solution_god_mode.py      # Mamba + KAN + Diffusion
+python PartD/solution_singularity.py   # RF-GNN + LLM Context
+python PartD/solution_universal.py     # TabR + TTA + TabPFN
+```
+
+---
+
+## Project Overview
 
 ### Part A: Maximum Likelihood Estimation
-Estimate the parameters (mean and covariance) of three 2D Gaussian distributions using Maximum Likelihood Estimation (MLE) and visualize them in a 3D plot.
-- **Dataset**: `dataset1.csv` (300 rows × 3 columns).
-- **Key Concepts**: MLE for Mean and Covariance, Gaussian Probability Density Function, 3D Visualization.
-- **Constraints**: No library functions allowed for MLE calculations.
+Estimate parameters (mean μ, covariance Σ) of three 2D Gaussian distributions using MLE and visualize them in 3D.
+
+**Key Features:**
+- Manual MLE implementation (no library functions)
+- 3D surface plots with interactive HTML visualization
+- Dark-themed custom colormaps
+
+**Outputs:** `gaussian_3d_plot.svg`, `gaussian_3d_interactive.html`, `density_peaks.txt`
+
+---
 
 ### Part B: Parzen Window Density Estimation
-Implement the Parzen Window method to estimate probability density functions using Hypercube and Gaussian kernels.
-- **Dataset**: `dataset2.csv` (200 rows × 1 column).
-- **Key Concepts**: Kernel Density Estimation (Hypercube, Gaussian), Optimal Bandwidth Selection, Error Estimation (Squared Error).
-- **Goal**: Estimate the PDF of the data and compare it with the true underlying distribution N(1,4).
+Implement non-parametric density estimation using Hypercube and Gaussian kernels.
+
+**Key Features:**
+- Optimal bandwidth selection via grid search
+- Error minimization against true N(1,4) distribution
+- Comparative kernel analysis
+
+**Outputs:** `histogram_verification.png`, `parzen_error_plots.png`
+
+---
 
 ### Part C: K-Nearest Neighbors Classifier
-Build a K-Nearest Neighbors (KNN) classifier from scratch, find the optimal k value, and visualize decision boundaries.
-- **Datasets**: `dataset3.csv` (Training) and `testset.csv` (Test).
-- **Key Concepts**: Euclidean Distance, Neighbor Selection, Classification Probability, Model Accuracy, Decision Boundary Visualization.
-- **Constraints**: No library distance functions allowed.
+Build a KNN classifier from scratch with decision boundary visualization.
 
-### Part D: Classification Challenge
-Develop a high-performance classification model to predict labels for an unlabeled test dataset with **5 distinct classes**. This part focuses on building a robust, production-quality pipeline that maximizes generalization on unseen data.
+**Key Features:**
+- Manual Euclidean distance implementation
+- Z-score normalization
+- Optimal k selection (validation on test set)
+- Decision boundary plots
 
-#### Datasets
-| File | Description |
-|------|-------------|
-| `datasetTV.csv` | Training/Validation set with ground-truth labels |
-| `datasetTest.csv` | Unlabeled test set (6,955 samples) for final prediction |
+**Outputs:** `knn_accuracy.png`, `knn_decision_boundary.png`
 
-#### Pipeline Overview
-The solution follows a **three-phase training pipeline**:
+---
 
+### Part D: Classification Challenge (Advanced)
+**Goal:** Maximize Multiclass Accuracy on a Dataset with 224 features and 5 classes.
+
+#### Standard Pipeline
+- **Feature Engineering**: DAE + Feature Selection
+- **Models**: TabPFN + Stacking Ensemble (XGBoost, CatBoost, SVM, RF, MLP)
+- **Blending**: Weighted average optimized via Hill Climbing
+
+#### Advanced SOTA Solutions
+
+| Solution | Architecture | Target |
+|----------|-------------|--------|
+| **God-Mode** | TabM (Mamba) + KAN + Diffusion | >95% |
+| **Singularity** | RF-GNN + LLM Context + Nelder-Mead | >93% |
+| **Universal** | TabR (Retrieval) + TTA + TabPFN | >92% |
+
+### How to Run
+```bash
+# Standard Pipeline
+python PartD/main.py --exp gen_data  # Generate Super Dataset
+python PartD/main.py --exp final     # Train & Predict
+
+# Advanced Solutions (Requires ml_god_mode environment)
+conda activate ml_god_mode
+python PartD/solution_god_mode.py
+python PartD/solution_singularity.py
+python PartD/solution_universal.py
 ```
-Phase 1: Initial Training    →    Phase 2: Pseudo-Labeling    →    Phase 3: Final Prediction
-     (Augmented TV Data)              (Expand with Test)              (Generate labels1.npy)
-```
 
 ---
-
-#### Phase 1: Data Preprocessing & Augmentation
-
-**Feature Scaling:**
-- All features are normalized using `StandardScaler` to ensure zero mean and unit variance.
-- This is critical for distance-based (SVM) and gradient-based (MLP, XGBoost) algorithms.
-
-**Dimensionality Reduction (SVM only):**
-- PCA reduces features to 100 principal components before feeding into the SVM.
-- This speeds up the computationally expensive RBF kernel while retaining most variance.
-
-**Data Augmentation (Gaussian Noise Injection):**
-- The training set is **doubled** by adding copies with small Gaussian noise (σ = 0.05).
-- **Purpose**: Acts as a regularization technique, forcing models to learn smoother decision boundaries and improving robustness to minor input perturbations.
-
----
-
-#### Phase 2: Stacking Ensemble Architecture
-
-The core of the solution is a **Stacking Classifier** that combines the strengths of four diverse base learners:
-
-| Model | Configuration | Strengths |
-|-------|---------------|-----------|
-| **SVM** | RBF kernel, C=10, PCA(100) | Excellent for complex, non-linear boundaries |
-| **Random Forest** | 300 trees, parallelized | Robust to noise, handles feature interactions |
-| **XGBoost** | 300 estimators, lr=0.05, depth=6 | State-of-the-art gradient boosting, GPU-accelerated |
-| **MLP** | (512, 256) hidden layers, early stopping | Learns abstract representations, captures complex patterns |
-
-**Why Stacking?**
-- Each base model has different inductive biases and error patterns.
-- The **meta-learner** (Logistic Regression) learns *when* to trust each model based on their out-of-fold predictions.
-- Internal 3-fold cross-validation ensures the meta-learner sees unbiased predictions, preventing overfitting.
-
----
-
-#### Phase 3: Pseudo-Labeling (Semi-Supervised Learning)
-
-After initial training, the model leverages unlabeled test data to refine its decision boundaries:
-
-1. **Predict probabilities** on the entire test set using the trained ensemble.
-2. **Identify high-confidence samples** where `max(probability) ≥ 90%`.
-3. **Treat these as ground truth** and add them to the training set.
-4. **Retrain the entire ensemble** on this expanded dataset.
-
-**Rationale:**
-- This is a form of **transductive learning** — adapting the model to the specific test distribution.
-- High-confidence samples are typically "easy" examples near cluster centers, which help clarify boundaries for ambiguous cases.
-
-**Safeguards Against Overfitting:**
-| Safeguard | How It Helps |
-|-----------|--------------|
-| **90% Confidence Threshold** | Only the most reliable predictions are used, minimizing error propagation |
-| **Stacking with CV** | Internal cross-validation prevents the meta-learner from memorizing training data |
-| **Gaussian Augmentation** | Noise injection regularizes base models and discourages overly sharp boundaries |
-| **Diverse Ensemble** | Errors from one model are often corrected by others, reducing confirmation bias |
-
----
-
-#### Output
-- **Final predictions** are saved to `labels1.npy` (shape: 6955,).
-- The trained model is persisted to `best_model_stacking_fast_cpu.pkl` for reproducibility.
 
 ## Project Structure
 ```
 MLProject/
-├── Datasets/           # Data files
-├── PartA/              # MLE Implementation
-├── PartB/              # Parzen Window Implementation
-├── PartC/              # KNN Implementation
-├── PartD/              # Classification Challenge
-├── Submission/         # Final Notebooks and Deliverables
+├── Datasets/              # Data files (gitignored)
+├── PartA/                 # MLE Implementation
+├── PartB/                 # Parzen Window Implementation
+├── PartC/                 # KNN Implementation
+├── PartD/                 # Classification Challenge
+│   ├── main.py            # Standard pipeline entry
+│   ├── solution_god_mode.py      # Mamba + KAN
+│   ├── solution_singularity.py   # RF-GNN + LLM
+│   ├── solution_universal.py     # TabR + TTA
+│   └── src/               # Core modules
+├── Submission/            # Final Deliverables
 │   ├── Team1-AC.ipynb
 │   ├── Team1-D.ipynb
 │   └── labels1.npy
-└── README.md
+├── README.md              # This file
+└── walkthrough.md         # Detailed experiment log
 ```
+
+---
+
+## Key Highlights
+
+| Part | Constraint | Highlight |
+|------|-----------|-----------|
+| **A** | No library MLE | Vectorized operations, 100x faster than loops |
+| **B** | Custom kernels | Broadcasting for O(M×N) pairwise distance |
+| **C** | No library distances | Z-score normalization prevents feature dominance |
+| **D** | SOTA | Multi-architecture ensemble (Mamba, KAN, GNN, TabPFN) |
+
+---
+
+## License
+Academic project — AUTH 2025-2026
