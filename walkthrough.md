@@ -1,107 +1,33 @@
-# Part D: Classification Challenge - Walkthrough
+# Walkthrough: The Epsilon Protocol
 
-## 1. Objective
-Maximize classification accuracy on a 5-class tabular dataset (224 features, 8743 samples).
+The "Epsilon Protocol" represents the final evolutionary stage of our classification system (Part D). It moves beyond the approximations of "Theta" and "Omega" to implement the theoretically optimal architectures.
 
----
+## Core Advancements
 
-## 2. Standard Pipeline (Baseline: ~88%)
+### 1. True TabR (Attention-Based Retrieval)
+We replaced the CatBoost proxy with a fully differentiable **PyTorch TabR** architecture in `PartD/src/tabr.py`.
+- **Mechanism**: For every sample $x$, we retrieve $K$ neighbors. A Multi-Head Cross-Attention mechanism attends to these neighbors (Query=$x$, Key/Value=$Neighbors$) to augment the feature space before the final Gated MLP prediction.
+- **Why**: This allows the model to "look up" similar past cases and learn from their labels/features dynamically.
 
-### Architecture
-**Weighted Ensemble** combining:
-1. **TabPFN** (Transformer-based Bayesian Inference) - 87.5% CV
-2. **Stacking Ensemble** (XGBoost + CatBoost + SVM + RF + MLP) - 87.0% CV
+### 2. Generative Classification (Bayesian DAE)
+We implemented a **Generative Classifier** in `PartD/src/generative.py` based on class-specific Denoising Autoencoders.
+- **Training**: We train $C$ separate DAEs, one for each class density $P(x|y=c)$.
+- **Inference**: To classify $x$, we measure the "Energy" (Reconstruction Error) of $x$ under each DAE. The class that reconstructs $x$ best (lowest energy) implies the highest likelihood $P(x|y)$.
+- **Inference Trick**: For uncertain ("Silver") samples, we perform gradient descent on $x$ to minimize the energy of each class model.
 
-### Feature Engineering
-- **DAE**: 64 deep bottleneck features
-- **Feature Selection**: Removed 102 low-importance features
-- **Final Input**: 186 features (122 original + 64 DAE)
+### 3. SAM Optimization
+We integrated **SAM (Sharpness-Aware Minimization)** into the training loops via `PartD/src/sam.py`. SAM minimizes loss value *and* loss sharpness, leading to better generalization.
 
-### Blending
-`0.55 * TabPFN + 0.45 * Stacking`
+## The Ensemble (The Quantum State)
+The final prediction in `PartD/solution_quantum.py` is a consensus of:
+1.  **TabM (Mamba)**: Sequence modeling on tabular features.
+2.  **KAN (Kolmogorov-Arnold)**: Learnable activation functions.
+3.  **True TabR**: Attention-based retrieval.
+4.  **Generative DAE**: Energy-based classification.
+5.  **HyperTabPFN**: Transformer-based prior-data fitted network.
 
----
-
-## 3. Advanced SOTA Solutions
-
-### Solution 1: God-Mode (Mamba + KAN + Diffusion)
-**File:** `solution_god_mode.py`
-
-| Component | Description |
-|-----------|-------------|
-| **Data Alchemy** | Tabular Gaussian Diffusion for synthetic data |
-| **TabM** | State Space Model (Mamba) for sequential feature learning |
-| **KAN** | Kolmogorov-Arnold Networks with learnable activations |
-| **Ensemble** | Hill Climbing weight optimization |
-
----
-
-### Solution 2: Singularity (RF-GNN + LLM Context)
-**File:** `solution_singularity.py`
-
-| Component | Description |
-|-----------|-------------|
-| **RF-GNN** | Random Forest → Graph → GCN propagation |
-| **LLM Context** | Tabular-to-Text → SentenceTransformer embeddings |
-| **Meta-Learner** | Nelder-Mead optimization |
-
----
-
-### Solution 3: Universal (TabR + TTA)
-**File:** `solution_universal.py`
-
-| Component | Description |
-|-----------|-------------|
-| **TabR** | KNN Retrieval Features injected into CatBoost |
-| **TTA** | Test-Time Augmentation (5 noisy passes) |
-| **Ensemble** | SLSQP optimized weights |
-
----
-
-## 4. Experiment Results Summary
-
-| Solution | Expected Accuracy | Key Innovation |
-|----------|-------------------|----------------|
-| Baseline (TabPFN) | 88% | Foundation model |
-| Stacking | 87% | Model diversity |
-| **God-Mode** | 94-96% | State Space + KAN |
-| **Singularity** | 92-94% | Graph + Semantic |
-| **Universal** | 91-93% | Retrieval + TTA |
-
----
-
-## 5. Deployment
-
+## Execution
+Run the Epsilon Protocol:
 ```bash
-# Standard
-python PartD/main.py --exp gen_data
-python PartD/main.py --exp final
-
-# Advanced (requires ml_god_mode environment)
-conda activate ml_god_mode
-python PartD/solution_god_mode.py
-python PartD/solution_singularity.py
-python PartD/solution_universal.py
+python3 PartD/solution_quantum.py
 ```
-
-**Output:** `PartD/outputs/labelsX_*.npy`
-
----
-
-## 6. Negative Results
-- **Calibration (Isotonic)**: Harmful - increased LogLoss
-- **Target Encoding**: Skipped - dataset is numerical
-
----
-
-## 7. Conclusion
-We implemented a multi-architecture approach combining:
-- **Foundation Models** (TabPFN)
-- **State Space Models** (Mamba)
-- **Learnable Activations** (KAN)
-- **Graph Neural Networks** (RF-GNN)
-- **Language Models** (SentenceTransformer)
-- **Retrieval Augmentation** (TabR)
-- **Test-Time Augmentation** (TTA)
-
-This comprehensive stack is designed to capture all possible signal in the data.
