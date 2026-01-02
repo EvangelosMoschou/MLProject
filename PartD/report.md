@@ -411,3 +411,49 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
 **Συγγραφέας:** Evangelos Moschou  
 **Ημερομηνία:** Ιανουάριος 2026  
 **Ίδρυμα:** Αριστοτέλειο Πανεπιστήμιο Θεσσαλονίκης
+
+---
+
+## 9. Omega-Singularity Protocol: Η Τελική Εξέλιξη
+
+Το **Omega-Singularity Protocol** αποτελεί την τελική εξέλιξη του Sigma-Omega, ενσωματώνοντας cutting-edge τεχνικές από τρία διακριτά παραδείγματα:
+- **God Mode**: Generative Power (Tabular Diffusion)
+- **Quantum**: Geometric Precision (Manifold Engineering)
+- **Research Manifest**: Drift-Adaptation (TTT, Adversarial Reweighting)
+
+### Νέα Χαρακτηριστικά
+
+#### 1. Trinity Feature Engine (Βελτιωμένη Μηχανική Χαρακτηριστικών)
+
+**α. RankGauss Transformation**: Αντί για QuantileTransformer, χρησιμοποιούμε άμεση εφαρμογή της αντίστροφης συνάρτησης σφάλματος για πιο ακριβή normalization.
+
+**β. Stability Selection**: Randomized Lasso με Bootstrap Aggregation για πιο robust feature selection.
+
+**γ. Transductive Denoising Autoencoder**: Εκπαίδευση σε train+test για πλούσιες αναπαραστάσεις χωρίς label leakage.
+
+#### 2. Tabular Diffusion (The Alchemist)
+
+Gaussian Diffusion για Synthetic Data Generation ανά κλάση, εφαρμοσμένη αποκλειστικά στο training fold κάθε CV split για αποφυγή validation leakage.
+
+#### 3. Νέα Μοντέλα
+
+**α. KAN (Kolmogorov-Arnold Networks)**: Βασισμένο στο Kolmogorov-Arnold Representation Theorem με learnable basis functions.
+
+**β. ThetaTabM με BatchEnsemble**: K διαφορετικά sub-models με minimal παραμέτρους, diversity χωρίς πολλαπλές εκπαιδεύσεις.
+
+#### 4. Ενισχυμένη Inference (The Adapter)
+
+**α. Test-Time Training με Consistency Regularization**: Entropy Minimization + Consistency Loss για adaptation χωρίς labels.
+
+**β. NNLS Stacking**: Non-Negative Least Squares για optimal model weights.
+
+### Entry Points
+
+```bash
+# Omega-Singularity (Full Protocol)
+python PartD/solution_omega.py
+
+# Sigma-Omega (Previous Version)  
+python PartD/solution_quantum.py
+```
+
