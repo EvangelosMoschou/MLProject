@@ -64,7 +64,7 @@ for c in classes:
     Z = rv.pdf(pos)
     
     # Χρήση wireframe αντί για surface για πιο καθαρή εμφάνιση
-    ax.plot_surface(X_grid, Y_grid, Z, alpha=0.6, color=colors[c], 
+    ax.plot_surface(X_grid, Y_grid, Z, alpha=0.85, color=colors[c], 
                    edgecolor='none', antialiased=True, 
                    shade=True, label=labels_text[c])
 
