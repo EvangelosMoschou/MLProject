@@ -42,18 +42,18 @@ for c in classes:
     print(f"  Σ = \n{Sigma}")
 
 # Create 3D visualization
-fig = plt.figure(figsize=(12, 8))
+fig = plt.figure(figsize=(14, 10))
 ax = fig.add_subplot(111, projection='3d')
 
-# Create grid
+# Create grid με περισσότερα points για ομαλότερη επιφάνεια
 x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
 y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-x_grid = np.linspace(x_min, x_max, 100)
-y_grid = np.linspace(y_min, y_max, 100)
+x_grid = np.linspace(x_min, x_max, 150)  # Αυξημένο από 100
+y_grid = np.linspace(y_min, y_max, 150)
 X_grid, Y_grid = np.meshgrid(x_grid, y_grid)
 pos = np.dstack((X_grid, Y_grid))
 
-colors = ['red', 'blue', 'green']
+colors = ['#E74C3C', '#3498DB', '#2ECC71']  # Πιο έντονα χρώματα
 labels_text = ['Class 0', 'Class 1', 'Class 2']
 
 for c in classes:
@@ -63,17 +63,26 @@ for c in classes:
     rv = multivariate_normal(mu, Sigma)
     Z = rv.pdf(pos)
     
-    ax.plot_surface(X_grid, Y_grid, Z, alpha=0.5, color=colors[c], label=labels_text[c])
+    # Χρήση wireframe αντί για surface για πιο καθαρή εμφάνιση
+    ax.plot_surface(X_grid, Y_grid, Z, alpha=0.6, color=colors[c], 
+                   edgecolor='none', antialiased=True, 
+                   shade=True, label=labels_text[c])
 
-ax.set_xlabel('Feature 1', fontsize=12)
-ax.set_ylabel('Feature 2', fontsize=12)
-ax.set_zlabel('Probability Density', fontsize=12)
-ax.set_title('3D Gaussian Distributions (MLE)', fontsize=14, fontweight='bold')
-ax.view_init(elev=20, azim=45)
+ax.set_xlabel('Feature 1', fontsize=14, fontweight='bold')
+ax.set_ylabel('Feature 2', fontsize=14, fontweight='bold')
+ax.set_zlabel('Probability Density', fontsize=14, fontweight='bold')
+ax.set_title('3D Gaussian Distributions (MLE)', fontsize=16, fontweight='bold', pad=20)
+
+# Βελτιωμένο viewing angle για καλύτερη οπτική
+ax.view_init(elev=25, azim=135)
+
+# Καλύτερο grid
+ax.grid(True, alpha=0.3, linestyle='--')
 
 plt.tight_layout()
-plt.savefig('../Presentation/plots/partA_3d_gaussians.png', dpi=150, bbox_inches='tight')
-print("\n✓ Saved: partA_3d_gaussians.png")
+plt.savefig('../Presentation/plots/partA_3d_gaussians.png', dpi=300, bbox_inches='tight', 
+           facecolor='white', edgecolor='none')
+print("\n✓ Saved: partA_3d_gaussians.png (High Resolution)")
 
 # Create 2D contour plot
 fig, ax = plt.subplots(figsize=(10, 8))
