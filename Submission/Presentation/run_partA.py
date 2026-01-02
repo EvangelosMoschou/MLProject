@@ -55,6 +55,7 @@ pos = np.dstack((X_grid, Y_grid))
 
 colors = ['#E74C3C', '#3498DB', '#2ECC71']  # Πιο έντονα χρώματα
 labels_text = ['Class 0', 'Class 1', 'Class 2']
+alphas = [0.45, 0.65, 0.65]  # Κόκκινη πιο διαφανής, άλλες λιγότερο
 
 for c in classes:
     mu = np.array(results[f'class_{c}']['mu'])
@@ -63,8 +64,8 @@ for c in classes:
     rv = multivariate_normal(mu, Sigma)
     Z = rv.pdf(pos)
     
-    # Χρήση wireframe αντί για surface για πιο καθαρή εμφάνιση
-    ax.plot_surface(X_grid, Y_grid, Z, alpha=0.85, color=colors[c], 
+    # Διαφορετικό alpha ανά κλάση
+    ax.plot_surface(X_grid, Y_grid, Z, alpha=alphas[c], color=colors[c], 
                    edgecolor='none', antialiased=True, 
                    shade=True, label=labels_text[c])
 
