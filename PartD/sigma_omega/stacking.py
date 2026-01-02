@@ -7,9 +7,10 @@ from sklearn.model_selection import StratifiedKFold
 from . import config
 from .losses import prob_meta_features
 from .features import apply_feature_view, build_streams  # Imported for Cross-Fit
+from .generative import synthesize_data
 
 def tabpfn_predict_proba(X_train, y_train, X_eval, n_ensembles=32, seed=42):
-    """Single fold prediction for TabPFN."""
+    """Πρόβλεψη μονού fold για TabPFN."""
     try:
         from tabpfn import TabPFNClassifier
     except Exception as e:
@@ -69,8 +70,21 @@ def fit_predict_stacking(
         y_tr, y_val = y[tr_idx], y[val_idx]
         sw_tr = sample_weight[tr_idx] if sample_weight is not None else None
         
-        # 2. APPLY VIEW TRANSFORM (Local fit)
-        # Transform X_val_raw and X_test_base using X_tr_raw statistics
+        # [OMEGA] Diffusion Augmentation
+        # Μόνο στα training data αυτού του fold
+        if config.DIFFUSION_EPOCHS > 0:
+            X_tr_raw, y_tr = synthesize_data(X_tr_raw, y_tr, n_new_per_class=1000)
+            # Επανασυγχρονισμός sample weights? 
+            # Το synthesize_data πρέπει να επιστρέφει updated weights ή το χειριζόμαστε;
+            # Το τρέχον synthesize_data επιστρέφει μόνο X, y. 
+            # Υποθέτουμε ότι τα νέα samples έχουν weight 1.0 ή μέσο όρο.
+            # Άρα αν υπάρχει sw_tr, πρέπει να το επεκτείνουμε.
+            if sw_tr is not None:
+                n_new = len(y_tr) - len(sw_tr)
+                sw_tr = np.concatenate([sw_tr, np.ones(n_new)])
+        
+        # 2. ΕΦΑΡΜΟΓΗ VIEW TRANSFORM (Τοπική fit)
+        # Μετασχηματισμός X_val_raw και X_test_base χρησιμοποιώντας στατιστικά του X_tr_raw
         X_tr_view, X_val_view = apply_feature_view(
             X_tr_raw, X_val_raw, 
             view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
@@ -84,7 +98,7 @@ def fit_predict_stacking(
              view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
         )
 
-        # 3. BUILD STREAMS (Local fit)
+        # 3. ΚΑΤΑΣΚΕΥΗ STREAMS (Τοπική fit)
         # We need X_tree and X_neural for Tr, Val, and Test
         # build_streams returns tr, te.
         # Val:
@@ -226,19 +240,40 @@ def fit_predict_stacking(
     # Or average local LID?
     # For now, omit LID in Meta (it's minor).
     
-    print("  > Fitting Meta-Learner...")
-    if config.META_LEARNER == 'lgbm':
-        from lightgbm import LGBMClassifier
-        meta = LGBMClassifier(
-            objective='multiclass',
-            num_class=int(num_classes),
-            n_estimators=100,
-            verbosity=-1
-        )
-    else:
-        meta = LogisticRegression(max_iter=2000, multi_class='multinomial')
-        
-    meta.fit(meta_X, y, sample_weight=sample_weight) # Meta trains on OOF vs Label
+    print("  > Fitting Meta-Learner (NNLS)...")
+    from scipy.optimize import nnls
     
-    final_probs = meta.predict_proba(meta_te)
+    # Θέλουμε να βρούμε βάρη w τέτοια ώστε OOF_preds @ w ~= y_onehot
+    # Το NNLS λύνει argmin_x || Ax - b ||_2, x >= 0
+    # Το A είναι OOF probabilities? 
+    # Standard Stacking: LogReg στο OOF.
+    # NNLS Stacking: Weighted average των models.
+    # A: OOF predictions (N, M, C) -> Flatten? Ή ανά class?
+    # Απλή προσέγγιση: Βρες scalar weight ανά model.
+    # A = (N, M). b = (N, ). Target είναι prob της σωστής κλάσης.
+    # Κατασκευή "Confidence in True Class" πίνακα Z
+    
+    # meta_X contains RAW PREDICTIONS from OOF
+    # Structure of meta_X is [Model1_Prob, Model2_Prob, ... ] each (N, C)
+    n_base_models = len(oof_preds)
+    Z = np.zeros((len(y), n_base_models))
+    for m_i in range(n_base_models):
+        # Extract the probability assigned to the true class
+        probs = oof_preds[m_i]
+        # Calibrate first? 
+        # Ideally yes, but let's trust raw for weights.
+        Z[:, m_i] = probs[np.arange(len(y)), y]
+        
+    target = np.ones(len(y)) # We want prob of true class to be 1.0
+    
+    weights, _ = nnls(Z, target)
+    weights /= (weights.sum() + 1e-9)
+    print(f"   [WEIGHTS] {weights}")
+    
+    # Apply weights to test predictions
+    # meta_te structure: [Model1_Test, Model2_Test, ...]
+    final_probs = np.zeros_like(test_preds_running[0])
+    for m_i in range(n_base_models):
+        final_probs += test_preds_running[m_i] * weights[m_i]
+    
     return final_probs

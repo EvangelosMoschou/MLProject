@@ -7,13 +7,13 @@ from .utils import seed_everything
 
 class EntropyMinimizationTTT:
     """
-    Implements Test-Time Training (TTT) via Entropy Minimization.
+    Υλοποίηση Test-Time Training (TTT) μέσω Entropy Minimization.
     
-    Instead of relying on 'Silver Samples' (confident pseudo-labels), this method
-    optimizes the model to be confident on *all* test samples by minimizing
-    the entropy of its predictions: H(p) = - sum p(x) * log p(x).
+    Αντί να βασιζόμαστε σε 'Silver Samples' (confident pseudo-labels), αυτή η μέθοδος
+    βελτιστοποιεί το model να είναι σίγουρο σε *όλα* τα test samples ελαχιστοποιώντας
+    την εντροπία των προβλέψεών του: H(p) = - sum p(x) * log p(x).
     
-    This encourages the decision boundary to move into low-density regions
+    Αυτό ενθαρρύνει το decision boundary να μετακινηθεί σε low-density περιοχές
     (cluster assumption).
     """
     def __init__(self, steps=1, lr=1e-4, optimizer_type='adam'):
@@ -23,17 +23,17 @@ class EntropyMinimizationTTT:
 
     def adapt(self, model, x_test_batch):
         """
-        Adapts a copy of the model on the given test batch.
+        Προσαρμόζει ένα αντίγραφο του model στο δοθέν test batch.
         
         Args:
-            model: The base PyTorch model (must have a forward method returning logits or probs).
-            x_test_batch: Tensor of test inputs.
+            model: Το βασικό PyTorch model (πρέπει να έχει forward method που επιστρέφει logits ή probs).
+            x_test_batch: Tensor test inputs.
             
         Returns:
-            adapted_model: A copy of the model fine-tuned on x_test_batch.
+            adapted_model: Αντίγραφο του model fine-tuned στο x_test_batch.
         """
-        # Create a deep copy to avoid modifying the original model permanently
-        # (unless we want online TTT, but generally episodic TTT is safer for stability)
+        # Δημιουργία deep copy για να μην τροποποιήσουμε το αρχικό model μόνιμα
+        # (εκτός αν θέλουμε online TTT, αλλά γενικά episodic TTT είναι πιο ασφαλές)
         adapted_model = copy.deepcopy(model)
         adapted_model.train()  # maintain dropout if useful, or use eval() if BN stats should be fixed
         
@@ -51,28 +51,21 @@ class EntropyMinimizationTTT:
             optimizer.zero_grad()
             
             # Forward pass
-            # We assume model returns LOGITS or PROBS. 
-            # To be safe, we check if output is normalized.
             outputs = adapted_model(x_test_batch)
-            
-            # Convert to probabilities if they are logits
-            # Heuristic: if any value is < 0 or > 1 or sum is far from 1, assume logits.
-            # But standard PyTorch models usually return logits or have a specific output.
-            # Let's assume the model returns LOGITS as is standard for stability.
-            
-            # However, looking at models_torch.py (to be checked), models might return probs in predict_proba.
-            # We need to call the forward method that returns logits for numerical stability of entropy.
-            # If the model only has predict_proba, we might be stuck.
-            
-            # Assumption: adapted_model is a nn.Module. calling it calls forward().
-            # calculate entropy: - sum p log p
-            # efficient way using log_softmax:
-            
             log_probs = torch.log_softmax(outputs, dim=1)
             probs = torch.exp(log_probs)
+            
+            # 1. Entropy Loss
             entropy = -(probs * log_probs).sum(dim=1).mean()
             
-            entropy.backward()
-            optimizer.step()
+            # 2. Consistency Loss (Επαύξηση/Θόρυβος)
+            noise = torch.randn_like(x_test_batch) * 0.05
+            outputs_n = adapted_model(x_test_batch + noise)
+            probs_n = torch.softmax(outputs_n, dim=1)
+            consistency = F.mse_loss(probs, probs_n)
             
+            loss = entropy + consistency
+            
+            loss.backward()
+            optimizer.step()            
         return adapted_model

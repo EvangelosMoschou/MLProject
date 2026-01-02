@@ -5,7 +5,7 @@ from .calibration import CalibratedModel
 from .domain import adversarial_weights
 from .features import apply_feature_view, build_streams
 from .losses import apply_lid_temperature_scaling
-from .models_torch import ThetaTabM, TrueTabR, is_torch_model, select_silver_samples
+from .models_torch import KAN, ThetaTabM, TrueTabR, is_torch_model, select_silver_samples
 from .models_trees import get_cat_langevin, get_xgb_dart
 from .pseudo import normalize_pseudo
 from .stacking import fit_predict_stacking
@@ -23,6 +23,23 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
     )
 
     X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te = build_streams(X_v, X_test_v)
+    
+    # [OMEGA] Diffusion Augmentation
+    # Μόνο επαύξηση των training data αν δεν κάνουμε validating/stacking (Stacking χειρίζεται strict CV εσωτερικά)
+    # Αλλά εδώ, είμαστε έξω από Stacking;
+    # Στην πραγματικότητα, το pipeline.py καλεί fit_predict_stacking Ή κάνει ensemble averaging.
+    # Αν ensemble averaging, το X_train_base ΕΙΝΑΙ τα training data για ολόκληρο το run (στο seed)
+    # Αλλά συνήθως κάνουμε validate χρησιμοποιώντας CV μέσα στο CalibratedModel (που κάνει 10-fold CV).
+    # Η επαύξηση πρέπει να γίνει ανά fold στο CV.
+    # Το CalibratedModel είναι generic.
+    # Το Stacking είναι generic.
+    # Το Diffusion πρέπει να γίνει ΜΕΣΑ στο CV split.
+    # Το fit_predict_stacking έχει το CV loop. Το Diffusion πρέπει να injectαριστεί ΕΚΕΙ.
+    # Για standard ensemble (else block): Το CalibratedModel χρησιμοποιεί CV εσωτερικά.
+    # Πρέπει να κάνουμε patch το CalibratedModel ή Diffusion εκεί.
+    # Απλούστερο: Μόνο προσθέστε Diffusion στο fit_predict_stacking που είναι το robust path.
+    # Αν ο user απενεργοποιήσει stacking, παραλείπουμε diffusion για τώρα ή το προσθέτουμε στο CalibratedModel αργότερα.
+    # Ας εστιαστούμε στο Stacking path καθώς είναι το "Grandmaster" default.
 
     pseudo_X_tree = None
     pseudo_X_neural = None
@@ -44,13 +61,13 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
     names_models = [
         ('XGB_DART', get_xgb_dart(num_classes)),
         ('Cat_Langevin', get_cat_langevin(num_classes)),
-        ('ThetaTabM', ThetaTabM(None, num_classes)), # Lazy init input_dim
+        ('ThetaTabM', ThetaTabM(None, num_classes)), 
         ('TrueTabR', TrueTabR(num_classes)),
+        ('KAN', KAN(None, num_classes)),
     ]
-
     if config.USE_STACKING:
-        # Cross-Fit Stacking: Pass raw data and view name.
-        # Transformations happen inside the K-Fold loop.
+        # Cross-Fit Stacking: Πέρασμα raw data και view name.
+        # Οι μετασχηματισμοί γίνονται μέσα στο K-Fold loop.
         p = fit_predict_stacking(
             names_models=names_models,
             view_name=view,
@@ -65,13 +82,13 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
             pseudo_y=pseudo_y,
             pseudo_w=pseudo_w,
         )
-        # Note: LID scaling for stacking output?
-        # If we didn't compute LID globally, we can't scale easily.
-        # But fit_predict_stacking output is already a meta-learner output.
-        # Usually we trust the meta-learner.
+        # Σημείωση: LID scaling για stacking output;
+        # Αν δεν υπολογίσαμε LID globally, δεν μπορούμε να scale εύκολα.
+        # Αλλά το fit_predict_stacking output είναι ήδη ένα meta-learner output.
+        # Συνήθως εμπιστευόμαστε το meta-learner.
         return p
 
-    # Standard Ensemble (Averaging) if Stacking is disabled
+    # Standard Ensemble (Μέσος Όρος) αν το Stacking είναι απενεργοποιημένο
     X_v, X_test_v = apply_feature_view(
         X_train_base,
         X_test_base,

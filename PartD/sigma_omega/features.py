@@ -11,6 +11,51 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from . import config
 from .domain import coral_align
+from scipy.special import erfinv
+from sklearn.linear_model import LogisticRegression
+
+class RankGaussScaler:
+    def fit(self, X, y=None): return self
+    def transform(self, X):
+        X = np.array(X)
+        # Αριθμητικό rank gauss
+        # Για να αποφύγουμε NaN στα όρια, χρησιμοποιούμε (rank+1)/(N+2) ή παρόμοιο
+        # Αλλά το erfinv απαιτεί (-1, 1). 
+        # Το SKLearn QuantileTransformer το κάνει ήδη robustly.
+        # Αλλά για "Purist" RankGauss:
+        ns = X.shape[0]
+        res = []
+        for i in range(X.shape[1]):
+            r = np.argsort(np.argsort(X[:, i]))
+            r = (r + 1) / (ns + 1)
+            # Κόψιμο για να αποφύγουμε infinity
+            r = 2 * r - 1
+            r = np.clip(r, -0.99999, 0.99999)
+            res.append(erfinv(r))
+        return np.vstack(res).T
+
+class StabilitySelector:
+    """Ανθεκτική επιλογή χαρακτηριστικών μέσω Randomized Lasso."""
+    def __init__(self, n_bootstrap=5, threshold=0.3):
+        self.n = n_bootstrap; self.t = threshold
+        self.support_ = None
+    
+    def fit(self, X, y):
+        print(f"   [SELECTOR] Running Stability Selection ({self.n} boots)...")
+        scores = np.zeros(X.shape[1])
+        n_sub = int(len(X) * 0.7)
+        for i in range(self.n):
+            idx = np.random.choice(len(X), n_sub, replace=False)
+            model = LogisticRegression(penalty='l1', solver='liblinear', C=0.2, random_state=i)
+            model.fit(X[idx], y[idx])
+            scores += (np.max(np.abs(model.coef_), axis=0) > 1e-4).astype(float)
+        self.support_ = (scores / self.n) > self.t
+        print(f"   [SELECTOR] Kept {np.sum(self.support_)} features.")
+        return self
+    
+    def transform(self, X): 
+        if self.support_ is None: return X
+        return X[:, self.support_]
 
 
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):

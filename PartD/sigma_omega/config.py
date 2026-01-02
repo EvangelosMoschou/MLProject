@@ -39,9 +39,12 @@ else:
     else:
         SEEDS = [42, 43, 44, 45, 46]
 
-BATCH_SIZE = 2048  # RTX 3060 Optimization
+BATCH_SIZE = 512  # Adjusted for RTX 3060 per requirements
 LR_SCALE = 2e-3
 SAM_RHO = 0.08
+TABM_K = _env_int('TABM_K', 4)  # BatchEnsemble members
+DIFFUSION_EPOCHS = _env_int('DIFFUSION_EPOCHS', 30)
+TTT_STEPS = _env_int('TTT_STEPS', 10)
 
 ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', False)
 USE_STACKING = _env_bool('USE_STACKING', False)

@@ -294,12 +294,66 @@ class TrueTabR(BaseEstimator, ClassifierMixin):
         return np.vstack(p)
 
 
+class KANLinear(nn.Module):
+    def __init__(self, d_in, d_out):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(d_out, d_in) * 0.1)
+    def forward(self, x):
+        return F.linear(x * F.silu(x), self.w)
+
+class KAN(nn.Module):
+    def __init__(self, d_in, n_classes, hidden=64):
+        super().__init__()
+        self.net = nn.Sequential(
+            KANLinear(d_in, hidden), nn.LayerNorm(hidden),
+            KANLinear(hidden, n_classes)
+        )
+    def forward(self, x): return self.net(x)
+
+class TabM_Layer(nn.Module):
+    def __init__(self, d_in, d_out, k=None):
+        super().__init__()
+        self.k = k if k is not None else config.TABM_K
+        self.linear = nn.Linear(d_in, d_out)
+        self.r = nn.Parameter(torch.randn(self.k, d_in) * 0.1 + 1.0)
+        self.s = nn.Parameter(torch.randn(self.k, d_out) * 0.1 + 1.0)
+        
+    def forward(self, x):
+        # x: (B, D) ή (B*K, D)
+        # Αν το input είναι (B, D), κάνουμε repeat interleave; Όχι, συνήθως το BatchEnsemble επεκτείνει batch.
+        # Αλλά εδώ υποθέτουμε ότι το input `x` αντιστοιχεί σε συγκεκριμένα ensemble members αν έχει επεκταθεί.
+        # Απλή περίπτωση: standard batch -> ensemble forward.
+        # Αλλά τα PyTorch layers περιμένουν (N, D).
+        # Υποθέτουμε ότι το X έχει επαναληφθεί K φορές upstream ή το κάνουμε εδώ.
+        # Απλούστερο: Το layer περιμένει (B*K, D).
+        return self.linear(x * self.r.repeat(x.shape[0]//self.k, 1)) * self.s.repeat(x.shape[0]//self.k, 1)
+
+class BatchEnsembleTabM(nn.Module):
+    def __init__(self, d_in, n_classes, k=None):
+        super().__init__()
+        self.k = k if k is not None else config.TABM_K
+        self.l1 = TabM_Layer(d_in, 256, self.k)
+        self.l2 = TabM_Layer(256, 128, self.k)
+        self.head = TabM_Layer(128, int(n_classes), self.k)
+        self.act = nn.GELU()
+        
+    def forward(self, x):
+        b = x.shape[0]
+        # Επέκταση για ensemble: (B, D) -> (B*K, D)
+        x = x.repeat_interleave(self.k, dim=0) 
+        x = self.act(self.l1(x))
+        x = self.act(self.l2(x))
+        # (B*K, C)
+        logits = self.head(x)
+        # Μέσος όρος στο K
+        logits = logits.view(b, self.k, -1).mean(dim=1)
+        return logits
+
 class ThetaTabM(BaseEstimator, ClassifierMixin):
     def __init__(self, input_dim=None, num_classes=None):
         self.input_dim = input_dim
         self.num_classes = num_classes
         self.model = None
-
     def _build_model(self, dim):
         return nn.Sequential(
             nn.Linear(dim, 256),
@@ -314,13 +368,12 @@ class ThetaTabM(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y, sample_weight=None):
         if self.num_classes is None:
-            # Try to infer
             self.num_classes = len(np.unique(y))
             
         if self.model is None:
             feat_dim = X.shape[1]
-            # Override input_dim if provided? No, trust data.
-            self.model = self._build_model(feat_dim)
+            # Χρήση βελτιωμένης BatchEnsemble αρχιτεκτονικής
+            self.model = BatchEnsembleTabM(feat_dim, self.num_classes).to(config.DEVICE)
 
         opt = SAM(self.model.parameters(), optim.AdamW, lr=config.LR_SCALE, rho=config.SAM_RHO)
 
