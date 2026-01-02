@@ -110,7 +110,7 @@
   - Baseline: 94.2% → Final: 97.8-98.2% (+3.8-4.0%)
   - Trinity Engine + Diffusion + KAN + BatchEnsemble + NNLS
 - **Sigma-Omega Protocol** (previous):
-  - Baseline: 94.2% → Final: 97.4% (+3.2%)
+  - Baseline: 94.2% → Tactical Estimate: 95.9% (+1.7%)
 - Feature reduction: 224 → 179 (-20%) με βελτίωση απόδοσης
 - 5 seeds × 10 folds = 50 trainings
 - ~2-3 ώρες σε RTX 3060

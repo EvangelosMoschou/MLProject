@@ -4,13 +4,15 @@ import numpy as np
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import StratifiedKFold
 
+from . import config
+
 
 class CalibratedModel:
     def __init__(self, base_model, name):
         self.base, self.name, self.ir = base_model, name, None
 
     def fit(self, X, y, sample_weight=None, pseudo_X=None, pseudo_y=None, pseudo_w=None):
-        skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+        skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True, random_state=42)
         self.models = []
         self.calibrators = []
 

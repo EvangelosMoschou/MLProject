@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 from . import config
 from .calibration import CalibratedModel
@@ -59,8 +60,8 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         )
 
     names_models = [
-        ('XGB_DART', get_xgb_dart(num_classes)),
-        ('Cat_Langevin', get_cat_langevin(num_classes)),
+        ('XGB_DART', get_xgb_dart(num_classes, iterations=config.GBDT_ITERATIONS)),
+        ('Cat_Langevin', get_cat_langevin(num_classes, iterations=config.GBDT_ITERATIONS * 2)),
         ('ThetaTabM', ThetaTabM(None, num_classes)), 
         ('TrueTabR', TrueTabR(num_classes)),
         ('KAN', KAN(None, num_classes)),
@@ -75,7 +76,7 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
             X_test_base=X_test_base,
             y=y_enc,
             num_classes=num_classes,
-            cv_splits=10,
+            cv_splits=config.N_FOLDS,
             seed=seed,
             sample_weight=sample_weight,
             pseudo_idx=pseudo_idx,
@@ -124,39 +125,72 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         if config.ENABLE_TTT and is_torch_model(base):
             if not config.ALLOW_TRANSDUCTIVE:
                 raise RuntimeError("ENABLE_TTT requires ALLOW_TRANSDUCTIVE=1 (it adapts on test features).")
+        # TTT Logic - Reflexion Core Upgrade
         if config.ENABLE_TTT and is_torch_model(base):
             if not config.ALLOW_TRANSDUCTIVE:
                 raise RuntimeError("ENABLE_TTT requires ALLOW_TRANSDUCTIVE=1 (it adapts on test features).")
             
-            # Reflexion Core Upgrade: Entropy Minimization TTT
             from .ttt import EntropyMinimizationTTT
             ttt_solver = EntropyMinimizationTTT(
                 steps=config.TTT_EPOCHS,
-                lr=config.TTT_LR_MULT * 1e-4, # heuristic base lr
+                lr=config.TTT_LR_MULT * 1e-4, 
             )
             
-            # For TTT, we need the PyTorch module. calibrated.model is the base model.
-            # We assume base is a wrapper that has a .module or is the module itself.
-            # However, base in models_torch.py usually effectively Wraps a model.
-            # Let's assume base.model is the nn.Module or base is it.
-            # Checking models_torch.py would be good, but let's try a generic approach first:
-            # If base has 'model' attribute, usage it.
+            # Apply TTT to each calibrated fold model
+            p_ttt_list = []
             
-            # Actually, let's just make sure we are not fine-tuning the global model permanently for this fold.
-            # The TTT class handles copy.
+            # data_te is numpy array.
+            # calibrated.models contains the trained models for each fold.
             
-            # We need to pass data_te (numpy) -> torch tensor
-            device = next(base.model.parameters()).device
+            # We need to broadcast data_te to torch for TTT.
+            # Note: We are adapting on the FULL test set (data_te) for each fold model.
+            # This is standard TTT.
+            
+            # Assuming models are on device.
+            device = config.DEVICE
             X_test_tensor = torch.tensor(data_te, dtype=torch.float32, device=device)
             
-            adapted = ttt_solver.adapt(base.model, X_test_tensor)
-            
-            # Predict with adapted model
-            import torch
-            adapted.eval()
-            with torch.no_grad():
-                logits = adapted(X_test_tensor)
-                p = torch.softmax(logits, dim=1).cpu().numpy()
+            for fold_i, model in enumerate(calibrated.models):
+                 # Clone to avoid mutating the original calibrated model if we want to keep it?
+                 # Yes, TTT is test-time only.
+                 # model is a sklearn wrapper or custom wrapper.
+                 # We need the underlying torch module.
+                 
+                 # Accessing inner module depends on wrapper.
+                 # For ThetaTabM/TrueTabR/KAN wrapper, .model is the module.
+                 if hasattr(model, 'model'):
+                     inner_module = model.model
+                 elif hasattr(model, 'module'):
+                     inner_module = model.module
+                 else:
+                     # Fallback
+                     inner_module = model
+                 
+                 # Prepare kwargs for TTT (e.g. neighbors for TabR)
+                 ttt_kwargs = {}
+                 if hasattr(model, 'get_neighbors'):
+                     # Retrieve neighbors for the test batch
+                     # Note: X_test_tensor is on device, get_neighbors handles it
+                     neighbors = model.get_neighbors(X_test_tensor)
+                     ttt_kwargs['neighbors'] = neighbors
+
+                 # Copy for adaptation
+                 import copy
+                 model_copy = copy.deepcopy(inner_module)
+                 model_copy.train() 
+                 
+                 # Adapt
+                 # Pass ttt_kwargs to adapt
+                 adapted_model = ttt_solver.adapt(model_copy, X_test_tensor, **ttt_kwargs)
+                 
+                 adapted_model.eval()
+                 with torch.no_grad():
+                     # Pass ttt_kwargs to forward
+                     logits = adapted_model(X_test_tensor, **ttt_kwargs)
+                     p_ttt_list.append(torch.softmax(logits, dim=1).cpu().numpy())
+
+            # Average TTT predictions across folds
+            p = np.mean(p_ttt_list, axis=0)
 
         if config.ENABLE_LID_SCALING:
             p = apply_lid_temperature_scaling(
@@ -168,5 +202,9 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
             )
 
         view_probs += p
-
+        
+        # Checkpointing per model/view
+        # Only saving if not stacking (stacking handles its own states?) 
+        # Actually simplest checkpoint is in main loop.
+        
     return view_probs / len(names_models)

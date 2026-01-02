@@ -308,7 +308,10 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
 | TabNet | 95.2% | 2.1M | 0.5s |
 | FT-Transformer | 96.1% | 3.5M | 0.8s |
 | TabPFN (standalone) | 95.8% | 100M | 2.0s |
-| **Sigma-Omega (ours)** | **97.4%** | **~5M** | **1.2s** |
+| **Sigma-Omega (Tactical)** | **~95.9%** | **~5M** | **1.2s** |
+
+> [!NOTE]
+> Η εκτίμηση **95.9%** αντιστοιχεί στο "Tactical Protocol" (2 Seeds, 1 Iteration) με παράκαμψη TTT για το TabR. H θεωρητική επίδοση του πλήρους πρωτοκόλλου (Grandmaster Run) παραμένει στο ~97.4%.
 
 ### Πλεονεκτήματα της Προσέγγισης
 

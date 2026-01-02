@@ -1,6 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from .utils import seed_everything
@@ -21,16 +22,17 @@ class EntropyMinimizationTTT:
         self.lr = lr
         self.optimizer_type = optimizer_type
 
-    def adapt(self, model, x_test_batch):
+    def adapt(self, model, x_test_batch, **kwargs):
         """
         Προσαρμόζει ένα αντίγραφο του model στο δοθέν test batch.
         
         Args:
-            model: Το βασικό PyTorch model (πρέπει να έχει forward method που επιστρέφει logits ή probs).
+            model: Το βασικό PyTorch model.
             x_test_batch: Tensor test inputs.
+            **kwargs: Extra inputs for the model (e.g. neighbors).
             
         Returns:
-            adapted_model: Αντίγραφο του model fine-tuned στο x_test_batch.
+            adapted_model: Αντίγραφο του model fine-tuned.
         """
         # Δημιουργία deep copy για να μην τροποποιήσουμε το αρχικό model μόνιμα
         # (εκτός αν θέλουμε online TTT, αλλά γενικά episodic TTT είναι πιο ασφαλές)
@@ -51,7 +53,7 @@ class EntropyMinimizationTTT:
             optimizer.zero_grad()
             
             # Forward pass
-            outputs = adapted_model(x_test_batch)
+            outputs = adapted_model(x_test_batch, **kwargs)
             log_probs = torch.log_softmax(outputs, dim=1)
             probs = torch.exp(log_probs)
             
@@ -60,7 +62,7 @@ class EntropyMinimizationTTT:
             
             # 2. Consistency Loss (Επαύξηση/Θόρυβος)
             noise = torch.randn_like(x_test_batch) * 0.05
-            outputs_n = adapted_model(x_test_batch + noise)
+            outputs_n = adapted_model(x_test_batch + noise, **kwargs)
             probs_n = torch.softmax(outputs_n, dim=1)
             consistency = F.mse_loss(probs, probs_n)
             

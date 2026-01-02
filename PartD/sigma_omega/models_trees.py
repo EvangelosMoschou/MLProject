@@ -1,7 +1,7 @@
 import torch
 
 
-def get_xgb_dart(n_c):
+def get_xgb_dart(n_c, iterations=500):
     from xgboost import XGBClassifier
 
     use_gpu = torch.cuda.is_available()
@@ -9,7 +9,7 @@ def get_xgb_dart(n_c):
         booster='dart',
         rate_drop=0.1,
         skip_drop=0.5,
-        n_estimators=500,
+        n_estimators=iterations,
         max_depth=6,
         learning_rate=0.05,
         objective='multi:softprob',
@@ -25,13 +25,13 @@ def get_xgb_dart(n_c):
     return XGBClassifier(**params)
 
 
-def get_cat_langevin(n_c):
+def get_cat_langevin(n_c, iterations=1000):
     from catboost import CatBoostClassifier
 
     return CatBoostClassifier(
         langevin=True,
         diffusion_temperature=1000,
-        iterations=1000,
+        iterations=iterations,
         depth=8,
         learning_rate=0.03,
         loss_function='MultiClass',

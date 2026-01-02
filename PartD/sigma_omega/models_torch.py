@@ -293,6 +293,22 @@ class TrueTabR(BaseEstimator, ClassifierMixin):
                 )
         return np.vstack(p)
 
+    def get_neighbors(self, X):
+        """Retrieve neighbors for TTT."""
+        # Check if model handles torch tensors or numpy
+        is_torch = torch.is_tensor(X)
+        if is_torch:
+            x_np = X.detach().cpu().numpy()
+        else:
+            x_np = X
+        
+        # Retrieval
+        nx = self.X_train_[self.knn.kneighbors(x_np, return_distance=False)]
+        
+        if is_torch:
+            return torch.tensor(nx, dtype=torch.float32).to(X.device)
+        return nx
+
 
 class KANLinear(nn.Module):
     def __init__(self, d_in, d_out):
@@ -301,7 +317,7 @@ class KANLinear(nn.Module):
     def forward(self, x):
         return F.linear(x * F.silu(x), self.w)
 
-class KAN(nn.Module):
+class KANModule(nn.Module):
     def __init__(self, d_in, n_classes, hidden=64):
         super().__init__()
         self.net = nn.Sequential(
@@ -309,6 +325,170 @@ class KAN(nn.Module):
             KANLinear(hidden, n_classes)
         )
     def forward(self, x): return self.net(x)
+
+
+class KAN(BaseEstimator, ClassifierMixin):
+    def __init__(self, input_dim=None, num_classes=None, hidden=64):
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.hidden = hidden
+        self.model = None
+
+    def fit(self, X, y, sample_weight=None):
+        if self.num_classes is None:
+            self.num_classes = len(np.unique(y))
+            
+        if self.model is None:
+            feat_dim = X.shape[1]
+            self.model = KANModule(feat_dim, self.num_classes, self.hidden).to(config.DEVICE)
+
+        opt = SAM(self.model.parameters(), optim.AdamW, lr=config.LR_SCALE, rho=config.SAM_RHO)
+
+        class_w = None
+        if config.USE_CLASS_BALANCED:
+            class_w_np = compute_class_balanced_weights(y, self.num_classes, beta=config.CB_BETA)
+            class_w = torch.tensor(class_w_np, dtype=torch.float32, device=config.DEVICE)
+
+        self.model.train()
+        
+        # Training loop (Simplified without MixUp/SWA for KAN to match simple implementation or minimal template)
+        # Using standard training loop from ThetaTabM but simplified if appropriate, or full copy.
+        # Given KAN is "experimental" usually, maybe standard training is enough.
+        # I will use the robust loop from ThetaTabM for consistency.
+        
+        dl = DataLoader(
+            TensorDataset(
+                torch.tensor(X, dtype=torch.float32).to(config.DEVICE),
+                torch.tensor(y, dtype=torch.long).to(config.DEVICE),
+                torch.tensor(np.asarray(sample_weight, dtype=np.float32) if sample_weight is not None else np.ones(len(X), dtype=np.float32)).to(config.DEVICE)
+            ),
+            batch_size=config.BATCH_SIZE,
+            shuffle=True
+        )
+
+        for ep in range(20):
+            for xb, yb, wb in dl:
+                opt.zero_grad()
+                logits = self.model(xb)
+                
+                # Hard coded Loss logic for brevity, or reuse function?
+                # Reusing inline logic from ThetaTabM for now to ensure consistency
+                if config.LOSS_NAME == 'focal':
+                    y_onehot = F.one_hot(yb, num_classes=self.num_classes).float()
+                    y_onehot = smooth_targets(y_onehot, config.LABEL_SMOOTHING)
+                    probs = torch.softmax(logits, dim=1).clamp(1e-8, 1.0 - 1e-8)
+                    pt = (probs * y_onehot).sum(dim=1)
+                    loss_vec = -torch.pow(1.0 - pt, float(config.FOCAL_GAMMA)) * torch.log(pt)
+                    if class_w is not None:
+                        w_class = (y_onehot * class_w.view(1, -1)).sum(dim=1)
+                        loss_vec = loss_vec * w_class
+                    loss = (loss_vec * wb).mean()
+                else:
+                    loss_vec = F.cross_entropy(
+                        logits,
+                        yb,
+                        reduction='none',
+                        weight=class_w,
+                        label_smoothing=float(config.LABEL_SMOOTHING) if config.LABEL_SMOOTHING > 0 else 0.0,
+                    )
+                    loss = (loss_vec * wb).mean()
+
+                loss.backward()
+                opt.first_step(zero_grad=True)
+                
+                # Second step
+                logits2 = self.model(xb)
+                if config.LOSS_NAME == 'focal':
+                    # ... recompute ...
+                    # To save lines I will just use the same loss function call if possible but I'll duplicate for safety
+                    y_onehot = F.one_hot(yb, num_classes=self.num_classes).float()
+                    y_onehot = smooth_targets(y_onehot, config.LABEL_SMOOTHING)
+                    probs2 = torch.softmax(logits2, dim=1).clamp(1e-8, 1.0 - 1e-8)
+                    pt2 = (probs2 * y_onehot).sum(dim=1)
+                    loss2_vec = -torch.pow(1.0 - pt2, float(config.FOCAL_GAMMA)) * torch.log(pt2)
+                    if class_w is not None:
+                        w_class = (y_onehot * class_w.view(1, -1)).sum(dim=1)
+                        loss2_vec = loss2_vec * w_class
+                    loss2 = (loss2_vec * wb).mean()
+                else:
+                    loss2_vec = F.cross_entropy(
+                        logits2,
+                        yb,
+                        reduction='none',
+                        weight=class_w,
+                        label_smoothing=float(config.LABEL_SMOOTHING) if config.LABEL_SMOOTHING > 0 else 0.0,
+                    )
+                    loss2 = (loss2_vec * wb).mean()
+                    
+                loss2.backward()
+                opt.second_step(zero_grad=True)
+                opt.base_optimizer.step()
+        
+        return self
+
+    def predict_proba(self, X):
+        self.model.eval()
+        p = []
+        with torch.no_grad():
+            for i in range(0, len(X), config.BATCH_SIZE):
+                p.append(
+                    torch.softmax(
+                        self.model(torch.tensor(X[i:i + config.BATCH_SIZE], dtype=torch.float32).to(config.DEVICE)),
+                        dim=1,
+                    )
+                    .cpu()
+                    .numpy()
+                )
+        return np.vstack(p)
+
+    def finetune_on_pseudo(self, X_pseudo, y_pseudo, epochs=1, lr_mult=0.2):
+        if X_pseudo is None or len(X_pseudo) == 0:
+            return self
+        self.model.train()
+        lr = float(config.LR_SCALE) * float(lr_mult)
+        opt = optim.AdamW(self.model.parameters(), lr=lr)
+
+        y_is_soft = (y_pseudo.ndim > 1) or np.issubdtype(y_pseudo.dtype, np.floating)
+        
+        class_w = None
+        if config.USE_CLASS_BALANCED:
+            y_for_bal = np.argmax(y_pseudo, axis=1) if y_is_soft else y_pseudo
+            class_w_np = compute_class_balanced_weights(y_for_bal, self.num_classes, beta=config.CB_BETA)
+            class_w = torch.tensor(class_w_np, dtype=torch.float32, device=config.DEVICE)
+
+        if not y_is_soft:
+            if config.LABEL_SMOOTHING > 0:
+                hard_crit = nn.CrossEntropyLoss(weight=class_w, label_smoothing=float(config.LABEL_SMOOTHING))
+            else:
+                hard_crit = nn.CrossEntropyLoss(weight=class_w)
+            y_t = torch.tensor(np.asarray(y_pseudo, dtype=np.int64))
+        else:
+            y_t = torch.tensor(np.asarray(y_pseudo, dtype=np.float32))
+
+        X_t = torch.tensor(np.asarray(X_pseudo, dtype=np.float32))
+        dl = DataLoader(TensorDataset(X_t, y_t), batch_size=config.BATCH_SIZE, shuffle=True)
+
+        for _ in range(int(epochs)):
+            for xb, yb in dl:
+                xb = xb.to(config.DEVICE)
+                yb = yb.to(config.DEVICE)
+                logits = self.model(xb)
+                
+                if y_is_soft:
+                    if config.LOSS_NAME == 'focal':
+                         loss = soft_target_focal(logits, yb, gamma=config.FOCAL_GAMMA, class_weights=class_w)
+                    else:
+                         loss = soft_target_ce(logits, yb, class_weights=class_w)
+                else:
+                    if config.LOSS_NAME == 'focal':
+                        y_onehot = F.one_hot(yb, num_classes=self.num_classes).float()
+                        y_onehot = smooth_targets(y_onehot, config.LABEL_SMOOTHING)
+                        loss = soft_target_focal(logits, y_onehot, gamma=config.FOCAL_GAMMA, class_weights=class_w)
+                    else:
+                        loss = hard_crit(logits, yb)
+                opt.zero_grad(); loss.backward(); opt.step()
+
+        return self
 
 class TabM_Layer(nn.Module):
     def __init__(self, d_in, d_out, k=None):

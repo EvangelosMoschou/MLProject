@@ -108,3 +108,17 @@ TTT_GAP_HIGH = _env_float('TTT_GAP_HIGH', 0.35)
 TTT_EPOCHS = _env_int('TTT_EPOCHS', 1)
 TTT_MAX_SAMPLES = _env_int('TTT_MAX_SAMPLES', 4096)
 TTT_LR_MULT = _env_float('TTT_LR_MULT', 0.2)
+
+# SMOKE TEST LOGIC (Must be last to override defaults)
+SMOKE_RUN = _env_bool('SMOKE_RUN', False)
+if SMOKE_RUN:
+    print(">>> SMOKE RUN DETECTED: REDUCING COMPLEXITY FOR VERIFICATION <<<")
+    SEEDS = [42]
+    DIFFUSION_EPOCHS = 5
+    DAE_EPOCHS = 5
+    GBDT_ITERATIONS = 50
+    N_FOLDS = 2
+else:
+    # Default iterations for full run
+    GBDT_ITERATIONS = 500
+    N_FOLDS = 5
