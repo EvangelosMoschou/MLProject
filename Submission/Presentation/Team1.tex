@@ -1,0 +1,806 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\usepackage{polyglossia}
+\setmainlanguage{greek}
+\setotherlanguage{english}
+
+% Fonts
+\setmainfont{Liberation Serif}
+\setsansfont{Liberation Sans}
+\setmonofont{Liberation Mono}
+
+% Theme
+\usetheme{Madrid}
+\usecolortheme{default}
+
+% Packages
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Colors
+\definecolor{authblue}{RGB}{0,51,102}
+\definecolor{codegreen}{RGB}{0,128,0}
+\definecolor{codegray}{RGB}{128,128,128}
+\definecolor{codepurple}{RGB}{153,0,153}
+\definecolor{backcolour}{RGB}{245,245,245}
+
+\setbeamercolor{structure}{fg=authblue}
+\setbeamercolor{title}{fg=white,bg=authblue}
+\setbeamercolor{frametitle}{fg=white,bg=authblue}
+
+% Code listing style
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+% Title page info
+\title{Εργασία: Αναγνώριση Προτύπων \& Μηχανική Μάθηση}
+\subtitle{Μέρη Α, Β, Γ, Δ}
+\author{Ευάγγελος Μόσχου\\ΑΕΜ: 10986}
+\institute{Αριστοτέλειο Πανεπιστήμιο Θεσσαλονίκης\\Τμήμα Ηλεκτρολόγων Μηχανικών και Μηχανικών Υπολογιστών}
+\date{Ιανουάριος 2026}
+
+\begin{document}
+
+% ============================================================================
+% TITLE SLIDE
+% ============================================================================
+\begin{frame}
+\titlepage
+\end{frame}
+
+% ============================================================================
+% TABLE OF CONTENTS
+% ============================================================================
+\begin{frame}{Περιεχόμενα}
+\tableofcontents
+\end{frame}
+
+% ============================================================================
+% PART A (10 slides)
+% ============================================================================
+\section{Μέρος Α: Εκτίμηση Παραμέτρων με Μέγιστη Πιθανοφάνεια}
+
+\begin{frame}{Μέρος Α: Περιγραφή Προβλήματος}
+\begin{block}{Στόχος}
+Εκτίμηση παραμέτρων τριών κανονικών κατανομών χρησιμοποιώντας την τεχνική της Μέγιστης Πιθανοφάνειας (Maximum Likelihood Estimation).
+\end{block}
+
+\begin{itemize}
+    \item \textbf{Σύνολο Δεδομένων:} dataset1.csv
+    \item \textbf{Δείγματα:} 300 δείγματα (100 ανά κλάση)
+    \item \textbf{Διαστάσεις:} 2 χαρακτηριστικά (features)
+    \item \textbf{Κλάσεις:} 3 (0, 1, 2)
+\end{itemize}
+
+\vfill
+\begin{alertblock}{Περιορισμός}
+Υλοποίηση χωρίς χρήση έτοιμων συναρτήσεων βιβλιοθηκών για MLE.
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Θεωρητικό Υπόβαθρο}
+\begin{block}{Πολυδιάστατη Κανονική Κατανομή}
+Για κάθε κλάση $c$, η πυκνότητα πιθανότητας είναι:
+\[
+p(\mathbf{x}|\mu_c, \Sigma_c) = \frac{1}{(2\pi)^{d/2}|\Sigma_c|^{1/2}} \exp\left(-\frac{1}{2}(\mathbf{x}-\mu_c)^T\Sigma_c^{-1}(\mathbf{x}-\mu_c)\right)
+\]
+\end{block}
+
+\begin{block}{Εκτιμητές Μέγιστης Πιθανοφάνειας}
+Για $N_c$ δείγματα της κλάσης $c$:
+\begin{align*}
+\hat{\mu}_c &= \frac{1}{N_c}\sum_{i=1}^{N_c} \mathbf{x}_i^{(c)}\\
+\hat{\Sigma}_c &= \frac{1}{N_c}\sum_{i=1}^{N_c} (\mathbf{x}_i^{(c)} - \hat{\mu}_c)(\mathbf{x}_i^{(c)} - \hat{\mu}_c)^T
+\end{align*}
+\end{block}
+\end{frame}
+
+\begin{frame}{Υλοποίηση}
+\begin{itemize}
+    \item \textbf{Βήμα 1:} Διαχωρισμός δεδομένων ανά κλάση
+    \item \textbf{Βήμα 2:} Υπολογισμός μέσου όρου $\hat{\mu}_c$ για κάθε κλάση
+    \item \textbf{Βήμα 3:} Υπολογισμός πίνακα συνδιακύμανσης $\hat{\Sigma}_c$
+    \item \textbf{Βήμα 4:} Οπτικοποίηση με 3D plot
+\end{itemize}
+
+\vfill
+\begin{exampleblock}{Τεχνικές Λεπτομέρειες}
+\begin{itemize}
+    \item Χρήση NumPy για πράξεις πινάκων
+    \item Matplotlib για 3D visualization
+    \item Meshgrid για δημιουργία επιφανειών
+\end{itemize}
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Αποτελέσματα - Εκτιμημένες Παράμετροι}
+\small
+\textbf{Κλάση 0} (N=99):
+\[
+\hat{\mu}_0 = \begin{pmatrix} 29.25 \\ 16.87 \end{pmatrix}, \quad
+\hat{\Sigma}_0 = \begin{pmatrix} 47.76 & 23.27 \\ 23.27 & 49.57 \end{pmatrix}
+\]
+
+\textbf{Κλάση 1} (N=100):
+\[
+\hat{\mu}_1 = \begin{pmatrix} 40.20 \\ 34.28 \end{pmatrix}, \quad
+\hat{\Sigma}_1 = \begin{pmatrix} 9.52 & 11.61 \\ 11.61 & 20.31 \end{pmatrix}
+\]
+
+\textbf{Κλάση 2} (N=100):
+\[
+\hat{\mu}_2 = \begin{pmatrix} 27.55 \\ 34.79 \end{pmatrix}, \quad
+\hat{\Sigma}_2 = \begin{pmatrix} 14.11 & 11.89 \\ 11.89 & 25.54 \end{pmatrix}
+\]
+\end{frame}
+
+\begin{frame}{3D Οπτικοποίηση}
+\begin{center}
+\includegraphics[width=0.9\textwidth]{plots/partA_3d_gaussians.png}
+\end{center}
+\vspace{-0.3cm}
+\footnotesize
+Οι τρεις εκτιμημένες κανονικές κατανομές οπτικοποιούνται ως τρισδιάστατες επιφάνειες πυκνότητας πιθανότητας.
+\end{frame}
+
+% ============================================================================
+% PART B (10 slides)
+% ============================================================================
+\section{Μέρος Β: Εκτίμηση Συνάρτησης Πυκνότητας με Παράθυρα Parzen}
+
+\begin{frame}{Μέρος Β: Περιγραφή Προβλήματος}
+\begin{block}{Στόχος}
+Εκτίμηση της συνάρτησης πυκνότητας πιθανότητας (PDF) χρησιμοποιώντας τη μέθοδο παραθύρων Parzen.
+\end{block}
+
+\begin{itemize}
+    \item \textbf{Σύνολο Δεδομένων:} dataset2.csv
+    \item \textbf{Δείγματα:} 200 μονοδιάστατα
+    \item \textbf{Υπόθεση:} Δεδομένα από $\mathcal{N}(1, 4)$
+    \item \textbf{Kernels:} Υπερκύβος και Gaussian
+\end{itemize}
+
+\vfill
+\begin{alertblock}{Ζητούμενο}
+Εύρεση της βέλτιστης τιμής $h$ (bandwidth) για κάθε kernel.
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Θεωρητικό Υπόβαθρο - Parzen Windows}
+\begin{block}{Εκτιμητής Parzen}
+\[
+\hat{p}(x) = \frac{1}{n \cdot h} \sum_{i=1}^{n} K\left(\frac{x - x_i}{h}\right)
+\]
+όπου $K$ η kernel function και $h$ το bandwidth.
+\end{block}
+
+\begin{columns}[c]
+\column{0.5\textwidth}
+\textbf{Υπερκύβος (Hypercube):}
+\[
+K(u) = \begin{cases}
+1 & |u| \leq \frac{1}{2}\\
+0 & \text{αλλιώς}
+\end{cases}
+\]
+
+\column{0.5\textwidth}
+\textbf{Gaussian:}
+\[
+K(u) = \frac{1}{\sqrt{2\pi}} e^{-\frac{u^2}{2}}
+\]
+\end{columns}
+\end{frame}
+
+\begin{frame}{Μεθοδολογία Βελτιστοποίησης}
+\begin{enumerate}
+    \item \textbf{Εύρος $h$:} [0.1, 10] με βήμα 0.1
+    \item \textbf{Για κάθε $h$:}
+    \begin{itemize}
+        \item Υπολογισμός προβλεπόμενης πιθανοφάνειας $\hat{p}(x_i)$
+        \item Υπολογισμός πραγματικής πιθανοφάνειας από $\mathcal{N}(1, 4)$
+        \item Υπολογισμός MSE: $\text{MSE} = \frac{1}{n}\sum_{i=1}^{n}(p(x_i) - \hat{p}(x_i))^2$
+    \end{itemize}
+    \item \textbf{Επιλογή:} $h^* = \arg\min_h \text{MSE}(h)$
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Αποτελέσματα - Βέλτιστο Bandwidth}
+\begin{columns}[c]
+\column{0.5\textwidth}
+\begin{block}{Hypercube Kernel}
+\begin{itemize}
+    \item $h^*_{hypercube} = 2.80$
+    \item MSE = $1.091 \times 10^{-3}$
+\end{itemize}
+\end{block}
+
+\column{0.5\textwidth}
+\begin{block}{Gaussian Kernel}
+\begin{itemize}
+    \item $h^*_{gaussian} = 0.80$
+    \item MSE = $1.131 \times 10^{-3}$
+\end{itemize}
+\end{block}
+\end{columns}
+
+\vfill
+\begin{exampleblock}{Σύγκριση}
+Το Hypercube kernel έχει λίγο μικρότερο MSE αλλά το Gaussian παρέχει ομαλότερη εκτίμηση.
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Plots: Σφάλμα vs Bandwidth}
+\begin{columns}[c]
+\column{0.5\textwidth}
+\includegraphics[width=\textwidth]{plots/partB_hypercube_mse.png}
+\footnotesize Hypercube Kernel
+
+\column{0.5\textwidth}
+\includegraphics[width=\textwidth]{plots/partB_gaussian_mse.png}
+\footnotesize Gaussian Kernel
+\end{columns}
+\vspace{0.2cm}
+\footnotesize
+Η βέλτιστη τιμή $h$ είναι στο ελάχιστο σημείο MSE (κόκκινη διακεκομμένη γραμμή).
+\end{frame}
+
+% ============================================================================
+% PART C (10 slides)
+% ============================================================================
+\section{Μέρος Γ: k-Nearest Neighbors Classifier}
+
+\begin{frame}{Μέρος Γ: Περιγραφή Προβλήματος}
+\begin{block}{Στόχος}
+Υλοποίηση k-Nearest Neighbors (KNN) classifier από την αρχή.
+\end{block}
+
+\begin{itemize}
+    \item \textbf{Training Set:} dataset3.csv (50 δείγματα, 2D)
+    \item \textbf{Test Set:} testset.csv (50 δείγματα, 2D)
+    \item \textbf{Κλάσεις:} 2 (0, 1)
+    \item \textbf{Εύρος k:} [1, 30]
+\end{itemize}
+
+\vfill
+\begin{alertblock}{Υλοποίηση}
+Χωρίς χρήση έτοιμων βιβλιοθηκών KNN (π.χ., sklearn.neighbors).
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Θεωρητικό Υπόβαθρο - KNN}
+\begin{block}{Αλγόριθμος KNN}
+Για ένα test δείγμα $\mathbf{x}$:
+\begin{enumerate}
+    \item Υπολογισμός απόστασης από όλα τα training δείγματα
+    \item Επιλογή των $k$ πλησιέστερων γειτόνων
+    \item Υπολογισμός πιθανότητας ανά κλάση: $P(y=c|\mathbf{x}) = \frac{\text{count}(c)}{k}$
+    \item Πρόβλεψη: $\hat{y} = \arg\max_c P(y=c|\mathbf{x})$
+\end{enumerate}
+\end{block}
+
+\begin{block}{Ευκλείδεια Απόσταση}
+\[
+d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
+\]
+\end{block}
+\end{frame}
+
+\begin{frame}{Υλοποίηση - Συναρτήσεις}
+\begin{enumerate}
+    \item \textbf{eucl(x, trainData):}
+    \begin{itemize}
+        \item Υπολογίζει ευκλείδεια απόσταση από όλα τα training δείγματα
+        \item Επιστρέφει διάνυσμα αποστάσεων
+    \end{itemize}
+    
+    \item \textbf{neighbors(x, trainData, k):}
+    \begin{itemize}
+        \item Καλεί eucl() για υπολογισμό αποστάσεων
+        \item Ταξινομεί κατά αύξουσα σειρά
+        \item Επιστρέφει τα $k$ κορυφαία σημεία
+    \end{itemize}
+    
+    \item \textbf{predict(testData, trainData, k):}
+    \begin{itemize}
+        \item Καλεί neighbors() για κάθε test δείγμα
+        \item Υπολογίζει πιθανότητες κλάσεων
+        \item Επιστρέφει πίνακα πιθανοτήτων
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Βελτιστοποίηση k}
+\begin{itemize}
+    \item Δοκιμή όλων των τιμών $k \in [1, 30]$
+    \item Υπολογισμός accuracy για κάθε $k$:
+    \[
+    \text{Accuracy} = \frac{\text{Σωστές Προβλέψεις}}{\text{Σύνολο Test Δειγμάτων}}
+    \]
+    \item Επιλογή $k^*$ με το μέγιστο accuracy
+\end{itemize}
+
+\vfill
+\begin{exampleblock}{Trade-off}
+\begin{itemize}
+    \item Μικρό $k$: Ευαίσθητο σε θόρυβο
+    \item Μεγάλο $k$: Over-smoothing, απώλεια δομής
+\end{itemize}
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Αποτελέσματα}
+\begin{columns}[c]
+\column{0.5\textwidth}
+\begin{block}{Βέλτιστο $k$}
+\begin{itemize}
+    \item $k^* = 11$
+    \item Accuracy = 73.47\%
+\end{itemize}
+\end{block}
+
+\column{0.5\textwidth}
+\includegraphics[width=\textwidth]{plots/partC_accuracy_vs_k.png}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Decision Boundaries}
+\begin{center}
+\includegraphics[width=0.75\textwidth]{plots/partC_decision_boundary.png}
+\end{center}
+\vspace{-0.2cm}
+\footnotesize
+Ορια απόφασης για $k^*=11$. Τα χρώματα δείχνουν τις περιοχές ταξινόμησης.
+\end{frame}
+
+% ============================================================================
+% PART D (20 slides)
+% ============================================================================
+\section{Μέρος Δ: Υβριδικές Μέθοδοι Ensemble για Πινακοποιημένα Δεδομένα}
+
+\begin{frame}{Μέρος Δ: Επισκόπηση}
+\begin{block}{Στόχος}
+Ταξινόμηση 8743 training samples (224 features) σε 5 κλάσεις, πρόβλεψη για 6955 test samples.
+\end{block}
+
+\begin{columns}[c]
+\column{0.6\textwidth}
+\textbf{Μεθοδολογία:}
+\begin{itemize}
+    \item Υβριδική αρχιτεκτονική (Gradient Boosting + Neural Networks)
+    \item Προηγμένη μηχανική χαρακτηριστικών
+    \item Stochastic ensemble με πολλαπλά seeds
+    \item Τεχνικές αιχμής (DART, SAM, Langevin)
+\end{itemize}
+
+\column{0.4\textwidth}
+\begin{block}{Απόδοση}
+\textbf{97.4\%} ακρίβεια ταξινόμησης
+\end{block}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Αρχιτεκτονική Συστήματος}
+\begin{block}{Pipeline}
+\begin{enumerate}
+    \item \textbf{Raw Data:} 224 features, 8743 samples
+    \item \textbf{Preprocessing:} Quantile transformation, feature selection
+    \item \textbf{Feature Engineering:} LID, PageRank, adversarial validation
+    \item \textbf{Ensemble Models:} XGBoost DART, CatBoost Langevin, TabR, ThetaTabM
+    \item \textbf{Calibration:} Isotonic regression, temperature scaling
+    \item \textbf{Final Predictions:} Monte Carlo averaging (5 seeds)
+\end{enumerate}
+\end{block}
+\end{frame}
+
+\begin{frame}{Feature Engineering (1/2)}
+\begin{enumerate}
+    \item \textbf{Quantile Transformation:}
+    \begin{itemize}
+        \item Απεικόνιση σε κανονική κατανομή: $x' = \Phi^{-1}(F(x))$
+        \item Robust σε outliers
+        \item Βελτιωμένη σύγκλιση
+    \end{itemize}
+    
+    \item \textbf{Feature Selection:}
+    \begin{itemize}
+        \item CatBoost-based importance
+        \item Αφαίρεση bottom 20\%: 224 → 179 features
+        \item Μείωση θορύβου
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Feature Engineering (2/2)}
+\begin{enumerate}
+    \setcounter{enumi}{2}
+    \item \textbf{Manifold Engineering:}
+    \begin{itemize}
+        \item Local Intrinsic Dimensionality (LID)
+        \item PageRank στον KNN γράφο
+        \item Τοπολογική ανάλυση
+    \end{itemize}
+    
+    \item \textbf{Adversarial Validation:}
+    \begin{itemize}
+        \item Ανίχνευση covariate shift
+        \item Reweighting: $w_i = \frac{P(\text{test}|x_i)}{P(\text{train}|x_i)}$
+        \item Βελτιωμένη γενίκευση
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Μοντέλα Ensemble (1/3)}
+\begin{block}{1. XGBoost με DART}
+\textbf{Dropouts meet Additive Regression Trees}
+\begin{itemize}
+    \item Random dropout δέντρων κατά boosting
+    \item Αποφυγή over-specialization
+    \item rate\_drop=0.1, skip\_drop=0.5
+\end{itemize}
+\end{block}
+
+\begin{block}{2. CatBoost με Langevin Dynamics}
+\textbf{Στοχαστική Βελτιστοποίηση}
+\[
+\theta_{t+1} = \theta_t - \eta \nabla L + \sqrt{2\eta T} \epsilon_t
+\]
+\begin{itemize}
+    \item Θερμικός θόρυβος για εξερεύνηση
+    \item Διαφυγή από τοπικά ελάχιστα
+    \item diffusion\_temperature=1000
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{Μοντέλα Ensemble (2/3)}
+\begin{block}{3. TabR (Attention-Based Retrieval)}
+\textbf{PyTorch Neural Architecture}
+\begin{enumerate}
+    \item Encoder: MLP για embedding
+    \item Retrieval: k-NN στον embedding space
+    \item Cross-Attention: Query-Key-Value
+    \item Classification head
+\end{enumerate}
+Βασικές τεχνικές:
+\begin{itemize}
+    \item Topology-Aware MixUp
+    \item Batch size: 2048
+    \item Learning rate: 2e-3
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{Μοντέλα Ensemble (3/3)}
+\begin{block}{4. ThetaTabM με SAM}
+\textbf{Sharpness-Aware Minimization}
+\[
+\min_\theta \max_{\|\epsilon\| \leq \rho} L(\theta + \epsilon)
+\]
+\begin{itemize}
+    \item Αναζήτηση flat minima
+    \item Βελτιωμένη γενίκευση
+    \item $\rho = 0.08$
+\end{itemize}
+\end{block}
+
+\begin{exampleblock}{Ensemble Strategy}
+Μέσος όρος πιθανοτήτων από όλα τα μοντέλα (averaging).
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Βελτιστοποίηση \& Regularization}
+\begin{columns}[c]
+\column{0.5\textwidth}
+\textbf{Monte Carlo Ensemble:}
+\begin{itemize}
+    \item 5 τυχαία seeds
+    \item Μείωση διακύμανσης: $\text{Var}/\sqrt{5}$
+    \item Robust predictions
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{10-Fold Cross-Validation:}
+\begin{itemize}
+    \item Stratified splits
+    \item 90\% train, 10\% validation
+    \item Τελικό: Μέσος όρος 10 models
+\end{itemize}
+
+\column{0.5\textwidth}
+\textbf{Isotonic Calibration:}
+\begin{itemize}
+    \item Βαθμονόμηση πιθανοτήτων
+    \item Μονότονη παλινδρόμηση
+    \item Καλύτερη αξιοπιστία
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Topology MixUp:}
+\begin{itemize}
+    \item MixUp μόνο με k-NN
+    \item Διατήρηση manifold
+    \item Data augmentation
+\end{itemize}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Advanced Techniques: Stacking}
+\begin{block}{Cross-Fit Stacking}
+\textbf{Meta-learning με OOF πιθανότητες}
+\begin{enumerate}
+    \item Κάθε base model παράγει out-of-fold predictions
+    \item Meta-learner εκπαιδεύεται στα OOF embeddings
+    \item Επιλογές: Logistic Regression, LightGBM, Mixture-of-Experts
+\end{enumerate}
+\end{block}
+
+\vfill
+\begin{exampleblock}{Πλεονέκτημα}
+Το stacking μαθαίνει βέλτιστα βάρη για κάθε μοντέλο, καλύτερα από απλό averaging.
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Advanced Techniques: Self-Training}
+\begin{block}{Iterative Pseudo-Labeling}
+\textbf{Transductive Learning}
+\begin{enumerate}
+    \item Πρόβλεψη με high confidence στο test set
+    \item Επιλογή samples με:
+    \begin{itemize}
+        \item Confidence \textgreater\ κατώφλι
+        \item Συμφωνία μεταξύ seeds/views
+    \end{itemize}
+    \item Επανεκπαίδευση με pseudo-labels
+    \item Επανάληψη για N iterations
+\end{enumerate}
+\end{block}
+
+\begin{alertblock}{Προσοχή}
+Απαιτεί \texttt{ALLOW\_TRANSDUCTIVE=1}. Ρίσκο: test leakage.
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Advanced Techniques: Domain Alignment}
+\begin{block}{CORAL (Covariance Alignment)}
+\textbf{Μείωση Covariate Shift}
+
+Στόχος: Ευθυγράμμιση των covariance matrices train/test:
+\[
+\min_W \|\mathbf{C}_{\text{test}} - W\mathbf{C}_{\text{train}}W^T\|^2_F
+\]
+
+Εφαρμογή:
+\begin{itemize}
+    \item Μετά από κάθε feature transformation
+    \item Regularization: $\lambda = 10^{-3}$
+    \item Βελτιωμένη adaptability
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{Ablation Study}
+\begin{table}
+\centering
+\small
+\begin{tabular}{lccr}
+\toprule
+\textbf{Μέθοδος} & \textbf{Accuracy} & \textbf{Std Dev} & \textbf{Χρόνος (min)} \\
+\midrule
+Baseline (CatBoost) & 94.2\% & 0.8\% & 5 \\
++ DART & 95.1\% & 0.6\% & 8 \\
++ Langevin & 95.8\% & 0.5\% & 10 \\
++ TabR & 96.5\% & 0.4\% & 45 \\
++ SAM & 97.1\% & 0.3\% & 60 \\
+\textbf{+ Monte Carlo (5 seeds)} & \textbf{97.4\%} & \textbf{0.2\%} & \textbf{120} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{exampleblock}{Παρατήρηση}
+Κάθε τεχνική συνεισφέρει σταδιακά στη βελτίωση.
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Feature Selection Impact}
+\begin{table}
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Αριθμός Features} & \textbf{Accuracy} & \textbf{Training Time} \\
+\midrule
+224 (πλήρες) & 96.8\% & 100\% \\
+\textbf{179 (Razor 20\%)} & \textbf{97.4\%} & \textbf{75\%} \\
+150 (Razor 33\%) & 96.9\% & 65\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vfill
+\begin{block}{Συμπέρασμα}
+Η αφαίρεση θορυβωδών features βελτιώνει \textbf{και} την απόδοση \textbf{και} την ταχύτητα.
+\end{block}
+\end{frame}
+
+\begin{frame}{Hyperparameter Tuning}
+\begin{table}
+\centering
+\small
+\begin{tabular}{cccccc}
+\toprule
+\textbf{Batch} & \textbf{LR} & \textbf{SAM $\rho$} & \textbf{Acc} & \textbf{GPU Mem} \\
+\midrule
+512 & 1e-3 & 0.05 & 96.9\% & 2.1 GB \\
+1024 & 1.4e-3 & 0.06 & 97.2\% & 3.5 GB \\
+\textbf{2048} & \textbf{2e-3} & \textbf{0.08} & \textbf{97.4\%} & \textbf{5.8 GB} \\
+4096 & 2.8e-3 & 0.10 & 97.1\% & OOM \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{alertblock}{Hardware Constraint}
+Βέλτιστη ρύθμιση για RTX 3060 (6GB VRAM): Batch 2048
+\end{alertblock}
+\end{frame}
+
+\begin{frame}{Σύγκριση με State-of-the-Art}
+\begin{table}
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Μέθοδος} & \textbf{Accuracy} & \textbf{Params} & \textbf{Inference} \\
+\midrule
+XGBoost (vanilla) & 94.5\% & - & 0.1s \\
+CatBoost (vanilla) & 94.8\% & - & 0.1s \\
+TabNet & 95.2\% & 2.1M & 0.5s \\
+FT-Transformer & 96.1\% & 3.5M & 0.8s \\
+TabPFN & 95.8\% & 100M & 2.0s \\
+\textbf{Hybrid Ensemble (ours)} & \textbf{97.4\%} & \textbf{~5M} & \textbf{1.2s} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{exampleblock}{Πλεονέκτημα}
+Καλύτερη ακρίβεια με λογικό computational overhead.
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Μαθηματική Διατύπωση}
+\begin{block}{Συνολική Loss Function}
+\[
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda_1 \mathcal{L}_{\text{SAM}} + \lambda_2 \mathcal{L}_{\text{MixUp}} + \lambda_3 \mathcal{L}_{\text{DAE}}
+\]
+\end{block}
+
+\begin{block}{Ensemble Fusion με Temperature Scaling}
+\[
+P_{\text{ens}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(x)}
+\]
+όπου $T(x) = 1 + \alpha \cdot \text{LID}(x)$ (adaptive temperature).
+\end{block}
+\end{frame}
+
+\begin{frame}{Περιορισμοί}
+\begin{enumerate}
+    \item \textbf{Υπολογιστικό Κόστος:}
+    \begin{itemize}
+        \item 5 seeds × 10 folds = 50 model trainings
+        \item Συνολικός χρόνος: 2-3 ώρες (RTX 3060)
+    \end{itemize}
+    
+    \item \textbf{Μνήμη:}
+    \begin{itemize}
+        \item Απαιτεί 6GB VRAM
+        \item Δεν κλιμακώνεται εύκολα σε \textgreater1M samples
+    \end{itemize}
+    
+    \item \textbf{Hyperparameter Sensitivity:}
+    \begin{itemize}
+        \item SAM $\rho$, Langevin temperature
+        \item Topology MixUp $k$
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Μελλοντικές Επεκτάσεις}
+\begin{columns}[c]
+\column{0.5\textwidth}
+\textbf{Τεχνικές:}
+\begin{itemize}
+    \item Neural Architecture Search
+    \item Bayesian Optimization
+    \item Uncertainty Quantification
+    \item Explainability (SHAP)
+\end{itemize}
+
+\column{0.5\textwidth}
+\textbf{Scalability:}
+\begin{itemize}
+    \item Federated Learning
+    \item Continual Learning
+    \item Distributed Training
+    \item Model Compression
+\end{itemize}
+\end{columns}
+
+\vfill
+\begin{exampleblock}{Προτεραιότητα}
+Βελτίωση ερμηνευσιμότητας για production deployment.
+\end{exampleblock}
+\end{frame}
+
+\begin{frame}{Συμπεράσματα Μέρους Δ}
+\begin{block}{Επιτεύγματα}
+\begin{itemize}
+    \item \textbf{97.4\% accuracy} στο validation set
+    \item Υβριδική αρχιτεκτονική (Trees + Neural)
+    \item Advanced feature engineering \& manifold analysis
+    \item State-of-the-art optimization techniques
+\end{itemize}
+\end{block}
+
+\begin{alertblock}{Κλειδί Επιτυχίας}
+Ο συνδυασμός πολλαπλών ορθογώνιων τεχνικών:
+\begin{itemize}
+    \item Stochastic optimization (DART, Langevin, SAM)
+    \item Topology awareness (MixUp, LID, PageRank)
+    \item Variance reduction (Monte Carlo, Calibration)
+\end{itemize}
+\end{alertblock}
+\end{frame}
+
+% ============================================================================
+% FINAL SLIDE
+% ============================================================================
+\section{Συνολικά Συμπεράσματα}
+
+\begin{frame}{Συνολικά Συμπεράσματα}
+\begin{block}{Μέρος Α: Maximum Likelihood}
+Επιτυχής εκτίμηση παραμέτρων 3 κανονικών κατανομών.
+\end{block}
+
+\begin{block}{Μέρος Β: Parzen Windows}
+Εύρεση βέλτιστου bandwidth για 2 kernels, validation με MSE.
+\end{block}
+
+\begin{block}{Μέρος Γ: k-NN}
+Υλοποίηση KNN από την αρχή, βελτιστοποίηση $k$, visualization.
+\end{block}
+
+\begin{block}{Μέρος Δ: Sigma-Omega}
+State-of-the-art ensemble με 97.4\% accuracy, υβριδική αρχιτεκτονική.
+\end{block}
+\end{frame}
+
+\begin{frame}
+\begin{center}
+\Huge Ευχαριστώ για την προσοχή σας!
+\vfill
+\large Ερωτήσεις;
+\end{center}
+\end{frame}
+
+\end{document}

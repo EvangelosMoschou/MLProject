@@ -1,20 +1,64 @@
-# Datasets/ (removed to include in push)
+# Python
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Jupyter
 .ipynb_checkpoints/
 
-# Large model files
+# Large binary files (keep labels1.npy for submission)
 *.pkl
-*.npy
-*.npz
 *.ckpt
+*.h5
+*.hdf5
+*.npy
+!Submission/labels1.npy
 
 # Cache folders
 .cache/
 catboost_info/
 prior/
+mlruns/
+wandb/
 
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LaTeX build artifacts (keep final PDF)
+Submission/Presentation/build/
+*.aux
+*.log
+*.out
+*.toc
+*.nav
+*.snm
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+
+# Temporary files
+*.tmp
+*.temp
+.pytest_cache/
+*.coverage
+
+# Antigravity brain (optional - comment out if you want to keep)
+# .gemini/

@@ -1,0 +1,107 @@
+import os
+import warnings
+
+import numpy as np
+import torch
+
+warnings.filterwarnings('ignore')
+
+
+def _env_bool(name, default=False):
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+
+def _env_int(name, default):
+    v = os.getenv(name)
+    return int(v) if v is not None and v.strip() != '' else int(default)
+
+
+def _env_float(name, default):
+    v = os.getenv(name)
+    return float(v) if v is not None and v.strip() != '' else float(default)
+
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Seeds (defaults preserve prior behavior; can override via SEEDS="1,2,3" or N_SEEDS/SEED_BASE)
+_seeds_env = os.getenv('SEEDS')
+if _seeds_env:
+    SEEDS = [int(s.strip()) for s in _seeds_env.split(',') if s.strip()]
+else:
+    _n_seeds = os.getenv('N_SEEDS')
+    if _n_seeds:
+        base = int(os.getenv('SEED_BASE', '42'))
+        n = int(_n_seeds)
+        SEEDS = [base + i for i in range(n)]
+    else:
+        SEEDS = [42, 43, 44, 45, 46]
+
+BATCH_SIZE = 2048  # RTX 3060 Optimization
+LR_SCALE = 2e-3
+SAM_RHO = 0.08
+
+ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', False)
+USE_STACKING = _env_bool('USE_STACKING', False)
+VIEWS = [v.strip().lower() for v in os.getenv('VIEWS', 'raw,quantile').split(',') if v.strip()]
+
+# Stacking enhancements (opt-in)
+META_LEARNER = os.getenv('META_LEARNER', 'lr').strip().lower()  # lr | lgbm | moe
+USE_TABPFN = _env_bool('USE_TABPFN', False)
+TABPFN_N_ENSEMBLES = _env_int('TABPFN_N_ENSEMBLES', 32)
+LGBM_MAX_DEPTH = _env_int('LGBM_MAX_DEPTH', 3)
+LGBM_NUM_LEAVES = _env_int('LGBM_NUM_LEAVES', 31)
+LGBM_N_ESTIMATORS = _env_int('LGBM_N_ESTIMATORS', 400)
+
+# Adversarial validation reweighting (opt-in)
+ENABLE_ADV_REWEIGHT = _env_bool('ENABLE_ADV_REWEIGHT', False)
+ADV_MODEL = os.getenv('ADV_MODEL', 'lr').strip().lower()  # lr | xgb
+ADV_CLIP = _env_float('ADV_CLIP', 10.0)
+ADV_POWER = _env_float('ADV_POWER', 1.0)
+
+# SWA (stochastic weight averaging) for ThetaTabM (opt-in)
+ENABLE_SWA = _env_bool('ENABLE_SWA', False)
+SWA_START_EPOCH = _env_int('SWA_START_EPOCH', 10)
+
+# CORAL feature alignment (opt-in; usually transductive)
+ENABLE_CORAL = _env_bool('ENABLE_CORAL', False)
+CORAL_REG = _env_float('CORAL_REG', 1e-3)
+
+# Iterative self-training with stability constraints (opt-in; transductive)
+ENABLE_SELF_TRAIN = _env_bool('ENABLE_SELF_TRAIN', False)
+SELF_TRAIN_ITERS = _env_int('SELF_TRAIN_ITERS', 0)
+SELF_TRAIN_CONF = _env_float('SELF_TRAIN_CONF', 0.92)
+SELF_TRAIN_AGREE = _env_float('SELF_TRAIN_AGREE', 1.0)
+SELF_TRAIN_VIEW_AGREE = _env_float('SELF_TRAIN_VIEW_AGREE', 0.66)
+SELF_TRAIN_MAX = _env_int('SELF_TRAIN_MAX', 10000)
+SELF_TRAIN_WEIGHT_POWER = _env_float('SELF_TRAIN_WEIGHT_POWER', 1.0)
+
+# Loss-optimized training knobs
+LOSS_NAME = os.getenv('LOSS', 'ce').strip().lower()  # ce | focal
+LABEL_SMOOTHING = _env_float('LABEL_SMOOTHING', 0.0)
+FOCAL_GAMMA = _env_float('FOCAL_GAMMA', 2.0)
+USE_CLASS_BALANCED = _env_bool('CLASS_BALANCED', False)
+CB_BETA = _env_float('CB_BETA', 0.999)
+USE_MIXUP = _env_bool('USE_MIXUP', True)
+
+# Efficiency knobs
+DAE_EPOCHS = _env_int('DAE_EPOCHS', 30)
+DAE_NOISE_STD = _env_float('DAE_NOISE_STD', 0.1)
+MANIFOLD_K = _env_int('MANIFOLD_K', 20)
+ENABLE_PAGERANK = _env_bool('ENABLE_PAGERANK', True)
+
+# LID temperature scaling (opt-in)
+ENABLE_LID_SCALING = _env_bool('ENABLE_LID_SCALING', False)
+LID_T_MIN = _env_float('LID_T_MIN', 1.0)
+LID_T_MAX = _env_float('LID_T_MAX', 2.5)
+LID_T_POWER = _env_float('LID_T_POWER', 1.0)
+
+# Test-time training (TTT) on "silver" samples (opt-in; transductive)
+ENABLE_TTT = _env_bool('ENABLE_TTT', False)
+TTT_GAP_LOW = _env_float('TTT_GAP_LOW', 0.10)
+TTT_GAP_HIGH = _env_float('TTT_GAP_HIGH', 0.35)
+TTT_EPOCHS = _env_int('TTT_EPOCHS', 1)
+TTT_MAX_SAMPLES = _env_int('TTT_MAX_SAMPLES', 4096)
+TTT_LR_MULT = _env_float('TTT_LR_MULT', 0.2)

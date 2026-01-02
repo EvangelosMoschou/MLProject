@@ -1,30 +1,28 @@
-# Walkthrough: The Epsilon Protocol
+# Walkthrough: Πρωτόκολλο Sigma-Omega
 
-The "Epsilon Protocol" represents the final evolutionary stage of our classification system (Part D). It moves beyond the approximations of "Theta" and "Omega" to implement the theoretically optimal architectures.
+Το πρωτόκολλο "Sigma-Omega" αποτελεί την τελική εξέλιξη του συστήματος ταξινόμησης, συνδυάζοντας προηγμένες τεχνικές επεξεργασίας δεδομένων με στοχαστικές μεθόδους βελτιστοποίησης.
 
-## Core Advancements
+## Βασικές Καινοτομίες
 
-### 1. True TabR (Attention-Based Retrieval)
-We replaced the CatBoost proxy with a fully differentiable **PyTorch TabR** architecture in `PartD/src/tabr.py`.
-- **Mechanism**: For every sample $x$, we retrieve $K$ neighbors. A Multi-Head Cross-Attention mechanism attends to these neighbors (Query=$x$, Key/Value=$Neighbors$) to augment the feature space before the final Gated MLP prediction.
-- **Why**: This allows the model to "look up" similar past cases and learn from their labels/features dynamically.
+### 1. Επεξεργασία Δεδομένων: Transductive Learning & Topology MixUp
+Υλοποιήθηκε ένας **Transductive DAE** που αντιμετωπίζει τα σύνολα εκπαίδευσης και δοκιμής ως ενιαία πολλαπλότητα.
+- **Topology MixUp**: Σε αντίθεση με το κλασικό MixUp, η ανάμειξη δειγμάτων γίνεται μόνο μεταξύ τοπολογικά γειτονικών σημείων, διατηρώντας τη δομή της πολλαπλότητας.
+- **Αυτόματη Επιλογή Χαρακτηριστικών**: Αφαίρεση του 20% των χαρακτηριστικών με τη χαμηλότερη σημαντικότητα, μειώνοντας τον θόρυβο.
 
-### 2. Generative Classification (Bayesian DAE)
-We implemented a **Generative Classifier** in `PartD/src/generative.py` based on class-specific Denoising Autoencoders.
-- **Training**: We train $C$ separate DAEs, one for each class density $P(x|y=c)$.
-- **Inference**: To classify $x$, we measure the "Energy" (Reconstruction Error) of $x$ under each DAE. The class that reconstructs $x$ best (lowest energy) implies the highest likelihood $P(x|y)$.
-- **Inference Trick**: For uncertain ("Silver") samples, we perform gradient descent on $x$ to minimize the energy of each class model.
+### 2. Στοχαστικά Μοντέλα
+- **XGBoost DART**: Κατά την προσθήκη νέου δέντρου, ορισμένα υπάρχοντα δέντρα απενεργοποιούνται τυχαία (Dropout), αποτρέποντας την υπερβολική εξάρτηση από συγκεκριμένους μαθητές.
+- **CatBoost Langevin**: Προσθήκη στοχαστικού θορύβου στις ενημερώσεις gradients, επιτρέποντας την αποφυγή στενών τοπικών ελαχίστων υπέρ ευρύτερων περιοχών γενίκευσης.
 
-### 3. SAM Optimization
-We integrated **SAM (Sharpness-Aware Minimization)** into the training loops via `PartD/src/sam.py`. SAM minimizes loss value *and* loss sharpness, leading to better generalization.
+### 3. Τεχνικές Βελτιστοποίησης
+- **Monte Carlo Ensemble**: Εκτέλεση του πρωτοκόλλου 5 φορές με διαφορετικά seeds (`42-46`) και υπολογισμός μέσου όρου, μειώνοντας τη διακύμανση.
+- **Isotonic Calibration**: Χρήση μη-παραμετρικής απεικόνισης (Isotonic Regression) για ευθυγράμμιση των προβλεπόμενων πιθανοτήτων με τα πραγματικά ποσοστά σφάλματος.
 
-## The Ensemble (The Quantum State)
-The final prediction in `PartD/solution_quantum.py` is a consensus of:
-1.  **TabM (Mamba)**: Sequence modeling on tabular features.
-2.  **KAN (Kolmogorov-Arnold)**: Learnable activation functions.
-3.  **True TabR**: Attention-based retrieval.
-4.  **Generative DAE**: Energy-based classification.
-5.  **HyperTabPFN**: Transformer-based prior-data fitted network.
+## Αρχιτεκτονική Συστήματος
+Το `solution_quantum.py` ενσωματώνει:
+1.  **TabR**: Μοντέλο ανάκτησης με attention σε επεξεργασμένα δεδομένα.
+2.  **ThetaTabM**: Gated MLP με SAM και MixUp (Βελτιστοποίηση RTX 3060: Batch 2048, LR 2e-3).
+3.  **XGBoost DART**: Boosting με dropout σε χαρακτηριστικά πολλαπλότητας.
+4.  **CatBoost Langevin**: Στοχαστικό boosting σε χαρακτηριστικά πολλαπλότητας.
 
 ## Execution
 Run the Epsilon Protocol:
