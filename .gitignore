@@ -60,5 +60,11 @@ Submission/Presentation/build/
 .pytest_cache/
 *.coverage
 
+# PartD outputs - tuning artifacts
+PartD/outputs/*.json
+PartD/outputs/*.db
+PartD/outputs/*.npz
+PartD/outputs/models/
+
 # Antigravity brain (optional - comment out if you want to keep)
 # .gemini/

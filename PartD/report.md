@@ -326,6 +326,8 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
 
 ### Περιορισμοί
 
+#### 7.1 Υπολογιστικοί Περιορισμοί
+
 1. **Υπολογιστικό Κόστος:** 
    - 5 seeds × 10 folds = 50 εκπαιδεύσεις
    - Χρόνος: ~2-3 ώρες σε RTX 3060
@@ -338,11 +340,44 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
    - SAM ρ, Langevin temperature απαιτούν tuning
    - Topology MixUp k (αριθμός γειτόνων) επηρεάζει απόδοση
 
+#### 7.2 Έλλειψη Εμπειρικής Επικύρωσης
+
+> [!WARNING]
+> Οι παρακάτω τεχνικές υλοποιήθηκαν βάσει θεωρητικών τεκμηρίων και βέλτιστων πρακτικών, αλλά **δεν έχουν επικυρωθεί εμπειρικά** στο συγκεκριμένο dataset.
+
+| Τεχνική | Υπόθεση | Πιθανό Ρίσκο |
+|---------|---------|--------------|
+| **Razor (Feature Selection)** | Τα features με χαμηλή σημαντικότητα είναι θόρυβος | Αφαίρεση features χρήσιμων για άλλα μοντέλα |
+| **Quantile Transformation** | Βοηθάει τη σύγκλιση νευρωνικών δικτύων | Άχρηστο για δενδρικά μοντέλα, πιθανή απώλεια πληροφορίας |
+| **Manifold Features (LID, PageRank)** | Η τοπολογική πληροφορία βελτιώνει γενίκευση | Επιπλέον υπολογιστικό κόστος χωρίς αποδεδειγμένο όφελος |
+| **Adversarial Reweighting** | Υπάρχει distribution shift μεταξύ train/test | Αν δεν υπάρχει shift, μπορεί να βλάψει την εκπαίδευση |
+| **Transductive Learning** | Το test set έχει ίδια κατανομή με το hidden test | Κίνδυνος overfitting στο visible test set |
+
+**Τι απαιτείται για επικύρωση:**
+1. Ablation study με cross-validation για κάθε τεχνική ξεχωριστά
+2. Στατιστικά σημαντικές διαφορές (paired t-test ή Wilcoxon)
+3. Πρόσβαση σε ground truth labels για το test set
+
+#### 7.3 Προτεινόμενες Μετριασμοί
+
+Για τους παραπάνω περιορισμούς, προτείνονται οι εξής λύσεις:
+
+| Ανησυχία | Μετριασμός |
+|----------|------------|
+| Razor αφαιρεί χρήσιμα features | Χρήση πιο συντηρητικού threshold (10% αντί 20%) ή καθόλου razor |
+| Quantile δεν βοηθά trees | Χρήση raw view για trees, quantile μόνο για neural |
+| Manifold features άγνωστης αξίας | Προαιρετική ενεργοποίηση μόνο αν CV βελτιώνεται |
+| Adversarial reweighting | Απενεργοποίηση (`ENABLE_ADV_REWEIGHT=0`) εκτός αν διαπιστωθεί shift |
+| Transductive overfitting | Χρήση πολύ υψηλού confidence threshold (≥0.99) ή απενεργοποίηση |
+
+
 ### Μελλοντικές Επεκτάσεις
 
-1. **Αυτόματη Αρχιτεκτονική Αναζήτηση (NAS):**
-   - Βελτιστοποίηση του TabR architecture
-   - Αυτόματη επιλογή k για retrieval
+1. **Neural Architecture Search (NAS):**
+   - Αυτόματη εύρεση βέλτιστης αρχιτεκτονικής (αριθμός layers, neurons, activation functions)
+   - Βελτιστοποίηση του TabR και ThetaTabM architecture
+   - Εργαλεία: AutoML, Optuna, Ray Tune
+   - Εκτιμώμενη βελτίωση: +0.3-0.5%
 
 2. **Federated Learning:**
    - Κατανεμημένη εκπαίδευση σε πολλαπλά nodes
@@ -360,6 +395,12 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
    - SHAP values για feature importance
    - Attention visualization για TabR interpretability
 
+6. **LLM Feature Extraction:**
+   - Χρήση Large Language Models (π.χ. GPT, BERT) για εξαγωγή embeddings
+   - Μετατροπή αριθμητικών features σε περιγραφικό κείμενο
+   - Συνένωση LLM embeddings με τα αρχικά features
+   - Πιθανή βελτίωση: +0.2-0.5% (υψηλό υπολογιστικό κόστος)
+
 ### Προτάσεις Βελτίωσης Ακρίβειας (Part D)
 
 Για περαιτέρω βελτίωση της ακρίβειας του Sigma-Omega Protocol, προτείνονται:
@@ -368,8 +409,8 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
    - Από 5 σε 10-15 seeds για μεγαλύτερη μείωση διακύμανσης
    - Αναμενόμενη βελτίωση: +0.1-0.2%
 
-2. **Προσθήκη TabPFN στο Ensemble:**
-   - Ενσωμάτωση TabPFN ως επιπλέον voter
+2. **TabPFN στο Ensemble:** ✅ *Υλοποιημένο*
+   - Ενσωμάτωση TabPFN ως επιπλέον voter (ενεργοποιημένο)
    - Παρέχει ανεξάρτητη οπτική (zero-shot learning)
 
 3. **Test-Time Augmentation (TTA):**

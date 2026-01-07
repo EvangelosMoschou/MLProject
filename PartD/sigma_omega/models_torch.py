@@ -128,13 +128,13 @@ class SAM(torch.optim.Optimizer):
 
 
 class TabRModule(nn.Module):
-    def __init__(self, input_dim, num_classes, context_size=96):
+    def __init__(self, input_dim, num_classes, context_size=96, hidden_dim=128, head_hidden=64):
         super().__init__()
-        self.encoder = nn.Sequential(nn.Linear(input_dim, 128), nn.SiLU(), nn.Linear(128, context_size))
+        self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, context_size))
         self.q_proj = nn.Linear(context_size, context_size)
         self.k_proj = nn.Linear(context_size, context_size)
         self.v_proj = nn.Linear(context_size, context_size)
-        self.head = nn.Sequential(nn.Linear(context_size, 64), nn.SiLU(), nn.Linear(64, num_classes))
+        self.head = nn.Sequential(nn.Linear(context_size, head_hidden), nn.SiLU(), nn.Linear(head_hidden, num_classes))
         self.scale = context_size ** -0.5
 
     def forward(self, x, neighbors):
@@ -147,15 +147,22 @@ class TabRModule(nn.Module):
 
 
 class TrueTabR(BaseEstimator, ClassifierMixin):
-    def __init__(self, num_classes, n_neighbors=16):
+    def __init__(self, num_classes, n_neighbors=16, context_size=96, hidden_dim=128, head_hidden=64):
         self.num_classes, self.n_neighbors = num_classes, n_neighbors
+        self.context_size, self.hidden_dim, self.head_hidden = context_size, hidden_dim, head_hidden
         self.model, self.knn, self.X_train_ = None, None, None
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, epochs=20):
         self.X_train_ = np.array(X, dtype=np.float32)
         self.knn = NearestNeighbors(n_neighbors=self.n_neighbors, n_jobs=-1).fit(self.X_train_)
         train_neighbor_idx = self.knn.kneighbors(self.X_train_, return_distance=False)
-        self.model = TabRModule(X.shape[1], self.num_classes).to(config.DEVICE)
+        self.model = TabRModule(
+            X.shape[1], 
+            self.num_classes,
+            context_size=self.context_size,
+            hidden_dim=self.hidden_dim,
+            head_hidden=self.head_hidden
+        ).to(config.DEVICE)
         opt = optim.AdamW(self.model.parameters(), lr=config.LR_SCALE)
 
         class_w = None
@@ -178,7 +185,7 @@ class TrueTabR(BaseEstimator, ClassifierMixin):
             dl = DataLoader(TensorDataset(X_t, y_t, idx_t, w_t), batch_size=config.BATCH_SIZE, shuffle=True)
 
         self.model.train()
-        for _ in range(15):
+        for _ in range(epochs):
             for batch in dl:
                 if sample_weight is None:
                     xb, yb, ib = batch
@@ -318,29 +325,62 @@ class KANLinear(nn.Module):
         return F.linear(x * F.silu(x), self.w)
 
 class KANModule(nn.Module):
-    def __init__(self, d_in, n_classes, hidden=64):
+    def __init__(self, d_in, n_classes, hidden=64, depth=2):
         super().__init__()
-        self.net = nn.Sequential(
-            KANLinear(d_in, hidden), nn.LayerNorm(hidden),
-            KANLinear(hidden, n_classes)
-        )
-    def forward(self, x): return self.net(x)
+        layers = []
+        # Input Layer
+        layers.append(KANLinear(d_in, hidden))
+        layers.append(nn.LayerNorm(hidden))
+        
+        # Hidden Layers
+        for _ in range(depth - 1): # -1 because input layer is one
+             layers.append(KANLinear(hidden, hidden))
+             layers.append(nn.LayerNorm(hidden)) # Optional: LayerNorm between KAN layers? Usually yes.
+             # Or maybe just one KANLinear is enough? 
+             # Standard KAN is 2 layers usually.
+             # Let's simple keep it simple: KANLinear -> Norm -> KANLinear ...
+        
+        # Head (Linear or KANLinear?) Usually final is Linear for logits, but KAN uses Splines everywhere.
+        # My implementation `KANLinear` is a linear projection on transformed features.
+        # Let's assume the last layer maps to n_classes.
+        # But wait, my previous code had `KANLinear(d_in, hidden)` then `KANLinear(hidden, n_classes)`.
+        # So "Depth" = number of KAN layers.
+        # Reworking loop:
+        
+        self.layers = nn.ModuleList()
+        self.layers.append(KANLinear(d_in, hidden))
+        self.norms = nn.ModuleList([nn.LayerNorm(hidden)])
+        
+        for _ in range(depth - 2):
+            self.layers.append(KANLinear(hidden, hidden))
+            self.norms.append(nn.LayerNorm(hidden))
+            
+        # Final Output Layer (KANLinear to classes)
+        self.head = KANLinear(hidden, n_classes)
+        self.depth = depth
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            x = self.norms[i](x)
+        return self.head(x)
 
 
 class KAN(BaseEstimator, ClassifierMixin):
-    def __init__(self, input_dim=None, num_classes=None, hidden=64):
+    def __init__(self, input_dim=None, num_classes=None, hidden=64, depth=2):
         self.input_dim = input_dim
         self.num_classes = num_classes
         self.hidden = hidden
+        self.depth = depth
         self.model = None
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, epochs=20):
         if self.num_classes is None:
             self.num_classes = len(np.unique(y))
             
         if self.model is None:
             feat_dim = X.shape[1]
-            self.model = KANModule(feat_dim, self.num_classes, self.hidden).to(config.DEVICE)
+            self.model = KANModule(feat_dim, self.num_classes, hidden=self.hidden, depth=self.depth).to(config.DEVICE)
 
         opt = SAM(self.model.parameters(), optim.AdamW, lr=config.LR_SCALE, rho=config.SAM_RHO)
 
@@ -366,7 +406,7 @@ class KAN(BaseEstimator, ClassifierMixin):
             shuffle=True
         )
 
-        for ep in range(20):
+        for ep in range(epochs):
             for xb, yb, wb in dl:
                 opt.zero_grad()
                 logits = self.model(xb)
@@ -509,51 +549,61 @@ class TabM_Layer(nn.Module):
         return self.linear(x * self.r.repeat(x.shape[0]//self.k, 1)) * self.s.repeat(x.shape[0]//self.k, 1)
 
 class BatchEnsembleTabM(nn.Module):
-    def __init__(self, d_in, n_classes, k=None):
+    def __init__(self, d_in, n_classes, k=None, hidden_dim=256, depth=3):
         super().__init__()
         self.k = k if k is not None else config.TABM_K
-        self.l1 = TabM_Layer(d_in, 256, self.k)
-        self.l2 = TabM_Layer(256, 128, self.k)
-        self.head = TabM_Layer(128, int(n_classes), self.k)
-        self.act = nn.GELU()
+        
+        layers = []
+        # Input Layer
+        layers.append(TabM_Layer(d_in, hidden_dim, self.k))
+        layers.append(nn.GELU())
+        
+        # Hidden Layers
+        for _ in range(depth - 2):
+            layers.append(TabM_Layer(hidden_dim, hidden_dim // 2, self.k))
+            layers.append(nn.GELU())
+            hidden_dim = hidden_dim // 2
+            
+        # Head
+        self.layers = nn.Sequential(*layers)
+        self.head = TabM_Layer(hidden_dim, int(n_classes), self.k)
         
     def forward(self, x):
         b = x.shape[0]
-        # Επέκταση για ensemble: (B, D) -> (B*K, D)
+        # Extend for ensemble: (B, D) -> (B*K, D)
         x = x.repeat_interleave(self.k, dim=0) 
-        x = self.act(self.l1(x))
-        x = self.act(self.l2(x))
+        x = self.layers(x)
         # (B*K, C)
         logits = self.head(x)
-        # Μέσος όρος στο K
+        # Average over K
         logits = logits.view(b, self.k, -1).mean(dim=1)
         return logits
 
 class ThetaTabM(BaseEstimator, ClassifierMixin):
-    def __init__(self, input_dim=None, num_classes=None):
+    def __init__(self, input_dim=None, num_classes=None, hidden_dim=256, depth=3, k=None):
         self.input_dim = input_dim
         self.num_classes = num_classes
+        self.hidden_dim, self.depth, self.k = hidden_dim, depth, k
         self.model = None
-    def _build_model(self, dim):
-        return nn.Sequential(
-            nn.Linear(dim, 256),
-            nn.LayerNorm(256),
-            nn.SiLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.LayerNorm(128),
-            nn.SiLU(),
-            nn.Linear(128, int(self.num_classes)),
-        ).to(config.DEVICE)
 
-    def fit(self, X, y, sample_weight=None):
+    def _build_model(self, dim):
+        # Legacy/Unused
+        return nn.Sequential().to(config.DEVICE)
+
+    def fit(self, X, y, sample_weight=None, epochs=20):
         if self.num_classes is None:
             self.num_classes = len(np.unique(y))
             
         if self.model is None:
             feat_dim = X.shape[1]
-            # Χρήση βελτιωμένης BatchEnsemble αρχιτεκτονικής
-            self.model = BatchEnsembleTabM(feat_dim, self.num_classes).to(config.DEVICE)
+            # Use improved BatchEnsemble architecture
+            self.model = BatchEnsembleTabM(
+                feat_dim, 
+                self.num_classes,
+                k=self.k,
+                hidden_dim=self.hidden_dim,
+                depth=self.depth
+            ).to(config.DEVICE)
 
         opt = SAM(self.model.parameters(), optim.AdamW, lr=config.LR_SCALE, rho=config.SAM_RHO)
 
@@ -577,7 +627,7 @@ class ThetaTabM(BaseEstimator, ClassifierMixin):
             except Exception:
                 swa_model = None
 
-        for ep in range(20):
+        for ep in range(epochs):
             use_mixup_local = config.USE_MIXUP and (sample_weight is None)
             if use_mixup_local:
                 iterator = TopologyMixUpLoader(X, y, num_classes=self.num_classes)

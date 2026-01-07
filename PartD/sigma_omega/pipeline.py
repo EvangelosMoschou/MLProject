@@ -62,10 +62,45 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
     names_models = [
         ('XGB_DART', get_xgb_dart(num_classes, iterations=config.GBDT_ITERATIONS)),
         ('Cat_Langevin', get_cat_langevin(num_classes, iterations=config.GBDT_ITERATIONS * 2)),
-        ('ThetaTabM', ThetaTabM(None, num_classes)), 
         ('TrueTabR', TrueTabR(num_classes)),
-        ('KAN', KAN(None, num_classes)),
+        # ('KAN', KAN(None, num_classes)), 
     ]
+    
+    if config.USE_TABPFN:
+        from .models_pfn import TabPFNWrapper
+        names_models.append(('TabPFN', TabPFNWrapper(device='cuda' if torch.cuda.is_available() else 'cpu', n_estimators=8)))
+
+    # --- SMART VIEW ROUTING ---
+    # Filter models based on the view to avoid redundancy and save time.
+    # Trees: Need Raw/PCA/ICA (Rotation blind). Invariant to Quantile.
+    # Neurals: Need Quantile (Scaling). Handle rotations natively.
+    
+    active_models = []
+    view_norm = view.strip().lower()
+    
+    # 1. Quantile View -> Neural Nets Only
+    if view_norm == 'quantile':
+        for name, model in names_models:
+            if name in ['TrueTabR', 'TabPFN']:
+                active_models.append((name, model))
+                
+    # 2. Raw / PCA / ICA Views -> Trees Only
+    elif view_norm in ['raw', 'pca', 'ica', 'rp']:
+        for name, model in names_models:
+            if name in ['XGB_DART', 'Cat_Langevin']:
+                 active_models.append((name, model))
+                 
+    # 3. Fallback (Unknown view or simple run) -> All Models
+    else:
+        active_models = names_models
+        
+    if not active_models:
+        print(f"Warning: Smart Routing left no models for view '{view}'. Using all.")
+        active_models = names_models
+        
+    names_models = active_models
+    # --------------------------
+
     if config.USE_STACKING:
         # Cross-Fit Stacking: Πέρασμα raw data και view name.
         # Οι μετασχηματισμοί γίνονται μέσα στο K-Fold loop.
@@ -107,19 +142,33 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
 
     view_probs = 0
     for name, base in names_models:
-        print(f"  > Calibrating {name} (10-Fold)...")
+        print(f"  > Calibrating {name} ({config.N_FOLDS}-Fold)...")
         data_tr = X_tree_tr if ('XGB' in name or 'Cat' in name) else X_neural_tr
         data_te = X_tree_te if ('XGB' in name or 'Cat' in name) else X_neural_te
 
-        calibrated = CalibratedModel(base, name)
-        calibrated.fit(
-            data_tr,
-            y_enc,
-            sample_weight=sample_weight,
-            pseudo_X=pseudo_X_tree if ('XGB' in name or 'Cat' in name) else pseudo_X_neural,
-            pseudo_y=pseudo.y if pseudo.active() else None,
-            pseudo_w=pseudo.w if pseudo.active() else None,
-        )
+        # Model checkpointing
+        checkpoint_dir = f"PartD/outputs/models/{view}_{seed}"
+        checkpoint_path = f"{checkpoint_dir}/{name}.pkl"
+        
+        import os
+        if config.LOAD_CHECKPOINTS and os.path.exists(checkpoint_path):
+            # Load pre-trained model
+            calibrated = CalibratedModel.load(checkpoint_path, base)
+        else:
+            # Train fresh
+            calibrated = CalibratedModel(base, name)
+            calibrated.fit(
+                data_tr,
+                y_enc,
+                sample_weight=sample_weight,
+                pseudo_X=pseudo_X_tree if ('XGB' in name or 'Cat' in name) else pseudo_X_neural,
+                pseudo_y=pseudo.y if pseudo.active() else None,
+                pseudo_w=pseudo.w if pseudo.active() else None,
+            )
+            # Save checkpoint
+            if config.SAVE_CHECKPOINTS:
+                calibrated.save(checkpoint_path)
+        
         p = calibrated.predict_proba(data_te)
 
         if config.ENABLE_TTT and is_torch_model(base):
@@ -201,10 +250,27 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
                 power=config.LID_T_POWER,
             )
 
+        # Store predictions for agreement analysis
+        if 'model_preds' not in dir():
+            model_preds = {}
+        model_preds[name] = np.argmax(p, axis=1)
+        
         view_probs += p
         
         # Checkpointing per model/view
         # Only saving if not stacking (stacking handles its own states?) 
         # Actually simplest checkpoint is in main loop.
+    
+    # Model Agreement Analysis
+    if len(model_preds) > 1:
+        print("      Model Agreement:")
+        model_names = list(model_preds.keys())
+        for i in range(len(model_names)):
+            for j in range(i + 1, len(model_names)):
+                m1, m2 = model_names[i], model_names[j]
+                agree = (model_preds[m1] == model_preds[m2]).mean()
+                # Low agreement = good diversity for ensemble
+                diversity = "✓" if agree < 0.90 else "⚠"
+                print(f"        {m1} vs {m2}: {agree:.1%} {diversity}")
         
     return view_probs / len(names_models)

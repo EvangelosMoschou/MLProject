@@ -1,4 +1,6 @@
 import copy
+import os
+import pickle
 
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
@@ -10,13 +12,38 @@ from . import config
 class CalibratedModel:
     def __init__(self, base_model, name):
         self.base, self.name, self.ir = base_model, name, None
+        self.models = []
+        self.calibrators = []
+
+    def save(self, path):
+        """Save trained models and calibrators to disk."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as f:
+            pickle.dump({
+                'name': self.name,
+                'models': self.models,
+                'calibrators': self.calibrators,
+            }, f)
+        print(f"    [CHECKPOINT] Saved {self.name} to {path}")
+
+    @classmethod
+    def load(cls, path, base_model=None):
+        """Load trained models from disk."""
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+        obj = cls(base_model, data['name'])
+        obj.models = data['models']
+        obj.calibrators = data['calibrators']
+        print(f"    [CHECKPOINT] Loaded {obj.name} from {path}")
+        return obj
 
     def fit(self, X, y, sample_weight=None, pseudo_X=None, pseudo_y=None, pseudo_w=None):
         skf = StratifiedKFold(n_splits=config.N_FOLDS, shuffle=True, random_state=42)
         self.models = []
         self.calibrators = []
+        self.cv_scores = []  # Track CV scores
 
-        for tr_idx, val_idx in skf.split(X, y):
+        for fold_i, (tr_idx, val_idx) in enumerate(skf.split(X, y)):
             X_tr, X_val = X[tr_idx], X[val_idx]
             y_tr, y_val = y[tr_idx], y[val_idx]
             sw_tr = sample_weight[tr_idx] if sample_weight is not None else None
@@ -82,6 +109,19 @@ class CalibratedModel:
                 model.fit(X_tr, y_tr)
 
             val_probs = model.predict_proba(X_val).astype(np.float32)
+            
+            # CV Score Logging
+            val_preds = np.argmax(val_probs, axis=1)
+            fold_acc = (val_preds == y_val).mean()
+            self.cv_scores.append(fold_acc)
+            
+            # Store predictions for confusion matrix
+            if not hasattr(self, '_all_val_preds'):
+                self._all_val_preds = []
+                self._all_val_true = []
+            self._all_val_preds.extend(val_preds.tolist())
+            self._all_val_true.extend(y_val.tolist())
+            
             c_list = []
             for c in range(val_probs.shape[1]):
                 iso = IsotonicRegression(out_of_bounds='clip')
@@ -90,6 +130,32 @@ class CalibratedModel:
 
             self.models.append(model)
             self.calibrators.append(c_list)
+
+        # Print CV Summary
+        mean_cv = np.mean(self.cv_scores)
+        std_cv = np.std(self.cv_scores)
+        print(f"      CV Score: {mean_cv:.2%} ± {std_cv:.2%}")
+        
+        # Per-Class Accuracy
+        all_preds = np.array(self._all_val_preds)
+        all_true = np.array(self._all_val_true)
+        classes = np.unique(all_true)
+        class_accs = []
+        for c in classes:
+            mask = all_true == c
+            if mask.sum() > 0:
+                acc = (all_preds[mask] == c).mean()
+                class_accs.append((c, acc))
+        
+        # Find weakest class
+        weakest = min(class_accs, key=lambda x: x[1])
+        strongest = max(class_accs, key=lambda x: x[1])
+        print(f"      Per-Class: Best={strongest[0]}({strongest[1]:.1%}) Worst={weakest[0]}({weakest[1]:.1%})")
+        
+        # Store confusion matrix for potential analysis
+        self.confusion_matrix = np.zeros((len(classes), len(classes)), dtype=int)
+        for t, p in zip(all_true, all_preds):
+            self.confusion_matrix[t, p] += 1
 
         return self
 

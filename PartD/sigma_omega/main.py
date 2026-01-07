@@ -27,7 +27,7 @@ def main():
     scout = CatBoostClassifier(iterations=config.GBDT_ITERATIONS, verbose=0, task_type='GPU' if torch.cuda.is_available() else 'CPU')
     scout.fit(X, y_enc)
     imps = scout.get_feature_importance()
-    thresh = np.percentile(imps, 20)
+    thresh = np.percentile(imps, 10)  # Conservative: only drop bottom 10%
     keep_mask = imps > thresh
     X_razor = X[:, keep_mask]
     X_test_razor = X_test[:, keep_mask]
