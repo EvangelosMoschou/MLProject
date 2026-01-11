@@ -133,6 +133,81 @@ class TransductiveDAE(nn.Module):
         return self.decoder(self.encoder(x))
 
 
+class TabularDiffusion(nn.Module):
+    """
+    Απλό Diffusion-like μοντέλο για tabular data augmentation.
+    Εκπαιδεύεται να αποθορυβοποιεί samples και στη συνέχεια
+    χρησιμοποιείται για να δημιουργήσει συνθετικά δεδομένα.
+    """
+    def __init__(self, dim, hidden=512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden), nn.SiLU(), nn.Dropout(0.1),
+            nn.Linear(hidden, hidden), nn.SiLU(), nn.Dropout(0.1),
+            nn.Linear(hidden, dim)
+        )
+    
+    def forward(self, x):
+        return self.net(x)
+
+
+def synthesize_data(X, y, n_new=1000, epochs=None, device=None):
+    """
+    Δημιουργεί συνθετικά training samples ανά κλάση μέσω Diffusion.
+    
+    Args:
+        X: Training features (numpy array)
+        y: Training labels (numpy array, integers)
+        n_new: Συνολικός αριθμός νέων samples
+        epochs: Epochs εκπαίδευσης (default: config.DIFFUSION_EPOCHS)
+        device: Torch device
+    
+    Returns:
+        X_syn, y_syn: Συνθετικά features και labels
+    """
+    if epochs is None:
+        epochs = config.DIFFUSION_EPOCHS
+    if device is None:
+        device = config.DEVICE
+    
+    classes = np.unique(y)
+    X_syn_all, y_syn_all = [], []
+    
+    for c in classes:
+        Xc = X[y == c]
+        if len(Xc) < 10:
+            continue  # Skip αν δεν υπάρχουν αρκετά samples
+        
+        # Train denoising diffusion
+        model = TabularDiffusion(Xc.shape[1]).to(device)
+        opt = optim.AdamW(model.parameters(), lr=1e-3)
+        Xt = torch.tensor(Xc, dtype=torch.float32).to(device)
+        
+        model.train()
+        for _ in range(int(epochs)):
+            noise = torch.randn_like(Xt) * 0.1
+            rec = model(Xt + noise)
+            loss = nn.functional.mse_loss(rec, Xt)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        
+        # Generate synthetic samples
+        model.eval()
+        n_gen = max(1, int(n_new / len(classes)))
+        with torch.no_grad():
+            seed_idx = np.random.choice(len(Xc), n_gen)
+            seed = Xt[seed_idx] + torch.randn(n_gen, Xc.shape[1], device=device) * 0.2
+            gen = model(seed).cpu().numpy()
+            X_syn_all.append(gen)
+            y_syn_all.append(np.full(n_gen, c))
+    
+    if not X_syn_all:
+        return np.zeros((0, X.shape[1])), np.zeros(0, dtype=y.dtype)
+    
+    return np.vstack(X_syn_all), np.concatenate(y_syn_all)
+
+
 class DataRefinery:
     def __init__(self, input_dim):
         self.dae = TransductiveDAE(input_dim).to(config.DEVICE)
@@ -201,7 +276,25 @@ def compute_manifold_features(X_train, X_test, allow_transductive=False, k=None,
         else:
             pagerank = np.zeros(len(X_all))
 
-        feats = np.column_stack([lid, pagerank])
+        # Laplacian Eigenmaps (geometry unfolding)
+        if config.ENABLE_LAPLACIAN:
+            try:
+                n_components = min(8, len(X_all) - 2)
+                se = SpectralEmbedding(n_components=n_components, n_neighbors=k, n_jobs=-1, random_state=42)
+                laplacian = se.fit_transform(X_all)
+                print(f"   [MANIFOLD] Laplacian Eigenmaps: {n_components} components")
+            except Exception as e:
+                print(f"   [MANIFOLD] Laplacian failed: {e}")
+                laplacian = np.zeros((len(X_all), 8))
+        else:
+            laplacian = np.zeros((len(X_all), 0))  # Empty if disabled
+
+        # Combine all manifold features
+        if laplacian.shape[1] > 0:
+            feats = np.column_stack([lid, pagerank, laplacian])
+        else:
+            feats = np.column_stack([lid, pagerank])
+        
         feats_tr, feats_te = feats[:len(X_train)], feats[len(X_train):]
         if return_lid:
             return feats_tr, feats_te, lid[:len(X_train)], lid[len(X_train):]

@@ -67,12 +67,15 @@ def fit_predict_stacking(
         if sample_weight is not None:
             sw_tr = sample_weight[tr_idx]
 
-        # [OMEGA] Diffusion Augmentation here?
-        # Typically Diffusion is applied to Raw Data before View Transform.
-        # But here X_tr_fold is already View-Transformed.
-        # For efficiency, we assume data generation happened upstream or we skip it here for speed.
-        # If we really want it, we need to pass Raw Data into the loop. 
-        # For now, relying on robust features.
+        # [OMEGA] Diffusion Augmentation
+        # Synthesize additional training samples per class to improve generalization
+        if config.ENABLE_DIFFUSION and len(X_tr_fold) > 100:
+            print(f"   [DIFFUSION] Augmenting fold training data...")
+            X_tr_fold, y_tr = synthesize_data(X_tr_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
+            # Update sample weights for augmented data
+            if sw_tr is not None:
+                sw_aug = np.ones(len(y_tr) - len(tr_idx), dtype=np.float32) * 0.5  # Lower weight for synthetic
+                sw_tr = np.concatenate([sw_tr, sw_aug])
         
         # 2. BUILD STREAMS (Local)
         # We need streams for Train and Val
@@ -156,6 +159,17 @@ def fit_predict_stacking(
             
             p_test = model.predict_proba(X_f_te).astype(np.float32)
             test_preds_running[idx_m] += p_test
+
+        # --- MEMORY CLEANUP PER FOLD ---
+        # Crucial for preventing OOM when using Diffusion + Manifold features
+        del X_train_aug, X_val_fold, X_train_final, y_train_final
+        try:
+             del X_tree_tr, X_tree_val, X_neural_tr, X_neural_val
+             del X_f_tr, X_f_val, X_f_te
+        except:
+             pass
+        import gc
+        gc.collect()
 
     # Average Test Predictions
     for i in range(n_models):

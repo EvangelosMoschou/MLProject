@@ -46,15 +46,15 @@ TABM_K = _env_int('TABM_K', 4)  # BatchEnsemble members
 DIFFUSION_EPOCHS = _env_int('DIFFUSION_EPOCHS', 30)
 TTT_STEPS = _env_int('TTT_STEPS', 10)
 
-ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', False)
-USE_STACKING = _env_bool('USE_STACKING', False)
+ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', True)  # Enable transductive learning (DAE, Laplacian use test data)
+USE_STACKING = _env_bool('USE_STACKING', True)  # Enable stacking meta-learner
 VIEWS = [v.strip().lower() for v in os.getenv('VIEWS', 'raw,quantile,pca,ica').split(',') if v.strip()]
 
 # Stacking enhancements (opt-in)
 # META_LEARNER tuned via Optuna (3030 trials): LR(C=0.55) = 87.20% > Ridge(86.96%) > NNLS(82.39%)
 META_LEARNER = os.getenv('META_LEARNER', 'lr').strip().lower()  # lr | lgbm | ridge | nnls
 USE_TABPFN = _env_bool('USE_TABPFN', True)  # Enabled: adds diversity to ensemble
-TABPFN_N_ENSEMBLES = _env_int('TABPFN_N_ENSEMBLES', 32)
+TABPFN_N_ENSEMBLES = _env_int('TABPFN_N_ENSEMBLES', 64)  # v2.5 supports higher ensembles
 LGBM_MAX_DEPTH = _env_int('LGBM_MAX_DEPTH', 3)
 LGBM_NUM_LEAVES = _env_int('LGBM_NUM_LEAVES', 31)
 LGBM_N_ESTIMATORS = _env_int('LGBM_N_ESTIMATORS', 400)
@@ -95,6 +95,9 @@ DAE_EPOCHS = _env_int('DAE_EPOCHS', 30)
 DAE_NOISE_STD = _env_float('DAE_NOISE_STD', 0.1)
 MANIFOLD_K = _env_int('MANIFOLD_K', 20)
 ENABLE_PAGERANK = _env_bool('ENABLE_PAGERANK', True)
+ENABLE_LAPLACIAN = _env_bool('ENABLE_LAPLACIAN', True)  # Laplacian Eigenmaps in manifold
+ENABLE_DIFFUSION = _env_bool('ENABLE_DIFFUSION', True)  # Diffusion augmentation per-fold
+DIFFUSION_N_SAMPLES = _env_int('DIFFUSION_N_SAMPLES', 1000)  # Synthetic samples per fold
 
 # LID temperature scaling (opt-in)
 ENABLE_LID_SCALING = _env_bool('ENABLE_LID_SCALING', False)
@@ -123,6 +126,10 @@ if SMOKE_RUN:
     DAE_EPOCHS = 5
     GBDT_ITERATIONS = 50
     N_FOLDS = 2
+    TABPFN_N_ENSEMBLES = 4  # Reduce from 64 to 4 for speed
+    ENABLE_DIFFUSION = False  # Disable diffusion augmentation
+    ENABLE_LAPLACIAN = False  # Disable Laplacian Eigenmaps
+    USE_TABPFN = False  # Disable TabPFN entirely for smoke test
 else:
     # Default iterations for full run
     GBDT_ITERATIONS = 500

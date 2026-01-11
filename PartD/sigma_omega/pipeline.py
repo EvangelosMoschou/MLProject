@@ -12,7 +12,18 @@ from .pseudo import normalize_pseudo
 from .stacking import fit_predict_stacking
 
 
-def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_classes, pseudo_idx=None, pseudo_y=None, pseudo_w=None):
+def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_classes, 
+                           pseudo_idx=None, pseudo_y=None, pseudo_w=None,
+                           X_train_raw=None, X_test_raw=None,
+                           razor_masks=None):
+    """
+    Predict probabilities for a single view.
+    
+    Args:
+        X_train_base, X_test_base: Razor-filtered data (default, for backward compat)
+        X_train_raw, X_test_raw: Raw unfiltered data (for TabPFN)
+        razor_masks: Dict with 'cat' and 'xgb' masks for per-model feature selection
+    """
     pseudo = normalize_pseudo(pseudo_idx=pseudo_idx, pseudo_y=pseudo_y, pseudo_w=pseudo_w)
 
     X_v, X_test_v = apply_feature_view(
@@ -66,31 +77,60 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         # ('KAN', KAN(None, num_classes)), 
     ]
     
+    # Store per-model razor masks if provided
+    if razor_masks is not None:
+        for name, model in names_models:
+            if 'XGB' in name:
+                model._razor_mask = razor_masks.get('xgb')
+                model._X_train_raw = X_train_raw
+                model._X_test_raw = X_test_raw
+            elif 'Cat' in name:
+                model._razor_mask = razor_masks.get('cat')
+                model._X_train_raw = X_train_raw
+                model._X_test_raw = X_test_raw
+            # TrueTabR uses default (cat mask via X_train_base)
+    
     if config.USE_TABPFN:
         from .models_pfn import TabPFNWrapper
-        names_models.append(('TabPFN', TabPFNWrapper(device='cuda' if torch.cuda.is_available() else 'cpu', n_estimators=8)))
+        # TabPFN uses raw unfiltered data if provided, bypassing Razor
+        tabpfn = TabPFNWrapper(
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            n_estimators=config.TABPFN_N_ENSEMBLES,
+        )
+        # Store raw data references for TabPFN to use instead of Razor-filtered
+        if X_train_raw is not None:
+            tabpfn._raw_train = X_train_raw
+            tabpfn._raw_test = X_test_raw
+        names_models.append(('TabPFN', tabpfn))
 
     # --- SMART VIEW ROUTING ---
     # Filter models based on the view to avoid redundancy and save time.
     # Trees: Need Raw/PCA/ICA (Rotation blind). Invariant to Quantile.
-    # Neurals: Need Quantile (Scaling). Handle rotations natively.
+    # TrueTabR: Need Quantile (Scaling). Handle rotations natively.
+    # TabPFN: Prefers RAW data (per authors' recommendation - minimal preprocessing).
     
     active_models = []
     view_norm = view.strip().lower()
     
-    # 1. Quantile View -> Neural Nets Only
+    # 1. Quantile View -> TrueTabR Only (TabPFN excluded - prefers raw)
     if view_norm == 'quantile':
         for name, model in names_models:
-            if name in ['TrueTabR', 'TabPFN']:
+            if name in ['TrueTabR']:  # TabPFN removed from quantile
                 active_models.append((name, model))
                 
-    # 2. Raw / PCA / ICA Views -> Trees Only
-    elif view_norm in ['raw', 'pca', 'ica', 'rp']:
+    # 2. Raw View -> Trees + TabPFN (TabPFN prefers raw data)
+    elif view_norm == 'raw':
+        for name, model in names_models:
+            if name in ['XGB_DART', 'Cat_Langevin', 'TabPFN']:
+                active_models.append((name, model))
+    
+    # 3. PCA / ICA / RP Views -> Trees Only
+    elif view_norm in ['pca', 'ica', 'rp']:
         for name, model in names_models:
             if name in ['XGB_DART', 'Cat_Langevin']:
                  active_models.append((name, model))
                  
-    # 3. Fallback (Unknown view or simple run) -> All Models
+    # 4. Fallback (Unknown view or simple run) -> All Models
     else:
         active_models = names_models
         

@@ -20,18 +20,68 @@ def main():
     y_enc = le.fit_transform(y)
     num_classes = len(le.classes_)
 
-    # Razor (Seed 42 Scout)
-    print("[RAZOR] Scanning for noise features...")
+    # Per-Model CV Razor (5-Fold CV-averaged importance)
+    print("[RAZOR] Computing per-model CV-averaged feature importance...")
     from catboost import CatBoostClassifier
-
-    scout = CatBoostClassifier(iterations=config.GBDT_ITERATIONS, verbose=0, task_type='GPU' if torch.cuda.is_available() else 'CPU')
-    scout.fit(X, y_enc)
-    imps = scout.get_feature_importance()
-    thresh = np.percentile(imps, 10)  # Conservative: only drop bottom 10%
-    keep_mask = imps > thresh
+    from sklearn.model_selection import StratifiedKFold
+    import xgboost as xgb
+    
+    n_splits = 5
+    razor_iterations = 500  # More iterations for stable importance
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    
+    # --- CatBoost CV Importance ---
+    cat_importances = []
+    print("  [CatBoost] Computing 5-fold CV importance...")
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
+        scout = CatBoostClassifier(
+            iterations=razor_iterations, 
+            verbose=0, 
+            task_type='GPU' if torch.cuda.is_available() else 'CPU',
+            random_seed=42 + fold_idx
+        )
+        scout.fit(X[train_idx], y_enc[train_idx])
+        cat_importances.append(scout.get_feature_importance())
+    cat_imp_avg = np.mean(cat_importances, axis=0)
+    
+    # --- XGBoost CV Importance ---
+    xgb_importances = []
+    print("  [XGBoost] Computing 5-fold CV importance...")
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
+        xgb_model = xgb.XGBClassifier(
+            n_estimators=razor_iterations,
+            max_depth=6,
+            learning_rate=0.1,
+            tree_method='hist',
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            random_state=42 + fold_idx,
+            verbosity=0,
+        )
+        xgb_model.fit(X[train_idx], y_enc[train_idx])
+        xgb_importances.append(xgb_model.feature_importances_)
+    xgb_imp_avg = np.mean(xgb_importances, axis=0)
+    
+    # --- Create Model-Specific Masks ---
+    razor_threshold = 10  # Bottom 10%
+    cat_thresh = np.percentile(cat_imp_avg, razor_threshold)
+    xgb_thresh = np.percentile(xgb_imp_avg, razor_threshold)
+    
+    cat_mask = cat_imp_avg > cat_thresh
+    xgb_mask = xgb_imp_avg > xgb_thresh
+    
+    # For backward compatibility, use CatBoost mask as default
+    keep_mask = cat_mask
     X_razor = X[:, keep_mask]
     X_test_razor = X_test[:, keep_mask]
-    print(f"  > Dropped {np.sum(~keep_mask)} features. New Dim: {X_razor.shape[1]}")
+    
+    print(f"  > CatBoost mask: {np.sum(cat_mask)}/{X.shape[1]} features kept")
+    print(f"  > XGBoost mask: {np.sum(xgb_mask)}/{X.shape[1]} features kept")
+    
+    # Store masks for per-model use in pipeline
+    razor_masks = {
+        'cat': cat_mask,
+        'xgb': xgb_mask,
+    }
 
     # 2. MONTE CARLO LOOP
     final_ensemble_probs = 0
@@ -67,6 +117,9 @@ def main():
                         pseudo_idx=pseudo.idx,
                         pseudo_y=pseudo.y,
                         pseudo_w=pseudo.w,
+                        X_train_raw=X,        # Raw data for TabPFN
+                        X_test_raw=X_test,    # Raw data for TabPFN
+                        razor_masks=razor_masks,  # Per-model masks
                     )
                     probs_per_view[view].append(p)
                     preds_per_view[view].append(np.argmax(p, axis=1))
@@ -146,7 +199,11 @@ def main():
                 print(f"  [VIEW] {view}")
                 if config.USE_STACKING:
                     print("  > Stacking meta-learner (OOF -> meta)...")
-                view_probs_total += predict_probs_for_view(view, seed, X_razor, X_test_razor, y_enc, num_classes)
+                view_probs_total += predict_probs_for_view(
+                    view, seed, X_razor, X_test_razor, y_enc, num_classes,
+                    X_train_raw=X, X_test_raw=X_test,  # Raw data for TabPFN
+                    razor_masks=razor_masks,  # Per-model masks
+                )
                 view_count += 1
             
             if isinstance(final_ensemble_probs, int):

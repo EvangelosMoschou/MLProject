@@ -387,9 +387,11 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
    - Προσαρμογή σε νέα δεδομένα χωρίς retraining από την αρχή
    - Elastic Weight Consolidation για αποφυγή catastrophic forgetting
 
-4. **Uncertainty Quantification:**
-   - Bayesian Neural Networks για epistemic uncertainty
-   - Conformal Prediction για calibrated prediction sets
+4. **Uncertainty Quantification:** ✅ *Μερικώς Υλοποιημένο*
+   - Isotonic Calibration για βαθμονόμηση πιθανοτήτων (ενεργοποιημένο)
+   - LID-based Temperature Scaling για adaptive confidence (ενεργοποιημένο)
+   - Εκτιμώμενη βελτίωση: ~0.1%
+   - Μελλοντικά: Conformal Prediction για calibrated prediction sets
 
 5. **Explainability:**
    - SHAP values για feature importance
@@ -421,9 +423,9 @@ $$P_{\text{ensemble}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(
    - Χρήση high-confidence predictions (>95%) ως επιπλέον training data
    - Επανεκπαίδευση με τα pseudo-labels
 
-5. **Βελτιστοποίηση Υπερπαραμέτρων:**
-   - Optuna/Hyperopt για systematic tuning
-   - Focus σε: learning rate, SAM ρ, XGBoost depth, CatBoost iterations
+5. **Βελτιστοποίηση Υπερπαραμέτρων:** ✅ *Υλοποιημένο*
+   - Optuna για systematic tuning (χρησιμοποιεί Bayesian Optimization εσωτερικά με TPE sampler)
+   - Focus σε: learning rate, SAM ρ, XGBoost depth, CatBoost iterations, Meta-Learner selection
 
 6. **Stacking Ensemble:**
    - Αντί για απλό averaging, χρήση meta-learner (π.χ. Logistic Regression)
@@ -500,4 +502,24 @@ python PartD/solution_omega.py
 # Sigma-Omega (Previous Version)  
 python PartD/solution_quantum.py
 ```
+
+---
+
+## 10. Αποτυχημένα Μοντέλα (Rejected Architectures)
+
+Κατά την ανάπτυξη του Sigma-Omega Protocol, εξετάστηκαν αρκετές σύγχρονες αρχιτεκτονικές που τελικά απορρίφθηκαν. Παρακάτω τεκμηριώνονται οι λόγοι:
+
+| Μοντέλο | Λόγος Απόρριψης |
+|---------|-----------------|
+| **GANDALF** | Neural Decision Tree με υψηλό ρίσκο υλοποίησης. Στην καλύτερη περίπτωση ισοδυναμεί με XGBoost, χωρίς transductive δυνατότητες. |
+| **KAN** | Υλοποιήθηκε αλλά αποδείχθηκε αργό και ασταθές. Η θεωρητική υπόσχεση (Kolmogorov) δεν μεταφράστηκε σε πρακτικό όφελος. |
+| **TabM** | Ενσωματώθηκε ως ThetaTabM αλλά η vanilla έκδοση υστερεί σε diversity έναντι του BatchEnsemble variant. |
+| **Hopular** | Redundant με TrueTabR (και τα δύο memory-based). Επιπλέον κόστος μνήμης χωρίς διαφοροποίηση. |
+| **CARTE** | Απαιτεί σημασιολογικά features (strings). Τα ανωνυμοποιημένα αριθμητικά δεδομένα μας το καθιστούν άχρηστο. |
+| **Mambular** | State-Space Model (Mamba) για tabular. Πολύ δύσκολη εγκατάσταση (CUDA kernels). *Πιθανώς αποτελεσματικό αν επιλυθούν τα dependency issues.* |
+| **DeepInsight** | Μετατρέπει tabular→images για CNN. Εξαιρετικά αργό και redundant με τα Manifold features που ήδη υπολογίζουμε. |
+| **AutoGluon** | Generic AutoML. Δεν υποστηρίζει TTT/Pseudo-labeling, που είναι η πηγή του +9% boost μας. |
+
+> [!NOTE]
+> Η απόρριψη αυτών των μοντέλων δεν σημαίνει ότι είναι αναποτελεσματικά γενικά. Απλώς δεν ταιριάζουν στη **transductive φιλοσοφία** του Sigma-Omega ή εισάγουν υπερβολικό ρίσκο/κόστος για οριακό όφελος.
 

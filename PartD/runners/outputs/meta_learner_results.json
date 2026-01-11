@@ -1,0 +1,7 @@
+{
+  "best_accuracy": 0.8683518243165962,
+  "best_params": {
+    "meta_type": "nnls"
+  },
+  "n_trials": 6091
+}

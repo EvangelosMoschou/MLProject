@@ -21,9 +21,10 @@ def load_data(filepath):
 def hypercube_kernel(u):
     """
     Πυρήνας υπερκύβου (ομοιόμορφος).
-    K(u) = 0.5 αν |u| <= 1, αλλιώς 0
+    K(u) = 1.0 αν |u| <= 0.5, αλλιώς 0
+    (Ορισμός με βάση το μήκος πλευράς h, όχι την ακτίνα)
     """
-    return np.where(np.abs(u) <= 1, 0.5, 0.0)
+    return np.where(np.abs(u) <= 0.5, 1.0, 0.0)
 
 def gaussian_kernel(u):
     """

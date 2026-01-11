@@ -28,7 +28,9 @@ from scipy.optimize import nnls
 warnings.filterwarnings('ignore')
 
 # Add parent dir to path
+# Add parent dirs to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from PartD.sigma_omega import config
 from PartD.sigma_omega.data import load_data_safe

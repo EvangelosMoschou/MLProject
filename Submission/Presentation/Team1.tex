@@ -407,49 +407,44 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \begin{enumerate}
     \item \textbf{Raw Data:} 224 features, 8743 samples
     \item \textbf{Preprocessing:} Quantile transformation, feature selection
-    \item \textbf{Feature Engineering:} LID, PageRank, adversarial validation
-    \item \textbf{Ensemble Models:} XGBoost DART, CatBoost Langevin, TabR, ThetaTabM
-    \item \textbf{Calibration:} Isotonic regression, temperature scaling
-    \item \textbf{Final Predictions:} Monte Carlo averaging (5 seeds)
+    \item \textbf{Feature Engineering:} LID, PageRank, Transductive DAE
+    \item \textbf{Ensemble Models:} XGBoost DART, CatBoost Langevin, TabR, TabPFN
+    \item \textbf{Calibration:} Isotonic regression, LID temperature scaling
+    \item \textbf{Final Predictions:} NNLS Stacking (5 seeds)
 \end{enumerate}
 \end{block}
 \end{frame}
 
-\begin{frame}{Feature Engineering (1/2)}
-\begin{enumerate}
-    \item \textbf{Quantile Transformation:}
-    \begin{itemize}
-        \item Απεικόνιση σε κανονική κατανομή: $x' = \Phi^{-1}(F(x))$
-        \item Robust σε outliers
-        \item Βελτιωμένη σύγκλιση
-    \end{itemize}
-    
-    \item \textbf{Feature Selection:}
-    \begin{itemize}
-        \item CatBoost-based importance
-        \item Αφαίρεση bottom 20\%: 224 → 179 features
-        \item Μείωση θορύβου
-    \end{itemize}
-\end{enumerate}
-\end{frame}
+\begin{frame}{Μηχανική Χαρακτηριστικών (Feature Engineering)}
+\footnotesize
+\begin{columns}[t]
+\column{0.5\textwidth}
+\textbf{1. Quantile Transformation:}
+\begin{itemize}
+    \item $x' = \Phi^{-1}(F(x))$
+    \item Robust σε outliers
+\end{itemize}
 
-\begin{frame}{Feature Engineering (2/2)}
-\begin{enumerate}
-    \setcounter{enumi}{2}
-    \item \textbf{Manifold Engineering:}
-    \begin{itemize}
-        \item Local Intrinsic Dimensionality (LID)
-        \item PageRank στον KNN γράφο
-        \item Τοπολογική ανάλυση
-    \end{itemize}
-    
-    \item \textbf{Adversarial Validation:}
-    \begin{itemize}
-        \item Ανίχνευση covariate shift
-        \item Reweighting: $w_i = \frac{P(\text{test}|x_i)}{P(\text{train}|x_i)}$
-        \item Βελτιωμένη γενίκευση
-    \end{itemize}
-\end{enumerate}
+\vspace{0.2cm}
+\textbf{2. Feature Selection (Razor):}
+\begin{itemize}
+    \item Per-model masks (Cat: 179, XGB: 180)
+    \item Μείωση θορύβου
+\end{itemize}
+
+\column{0.5\textwidth}
+\textbf{3. Manifold Engineering:}
+\begin{itemize}
+    \item LID, PageRank στον KNN γράφο
+\end{itemize}
+
+\vspace{0.2cm}
+\textbf{4. Transductive DAE:}
+\begin{itemize}
+    \item Εκπαίδευση σε train+test
+    \item Πλούσια embeddings χωρίς label leakage
+\end{itemize}
+\end{columns}
 \end{frame}
 
 \begin{frame}{Μοντέλα Ensemble (1/3)}
@@ -494,24 +489,22 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{frame}
 
 \begin{frame}{Μοντέλα Ensemble (3/3)}
-\begin{block}{4. ThetaTabM με SAM}
-\textbf{Sharpness-Aware Minimization}
-\[
-\min_\theta \max_{\|\epsilon\| \leq \rho} L(\theta + \epsilon)
-\]
+\begin{block}{4. TabPFN v2.5 (Prior-Data Fitted Network)}
+\textbf{In-Context Learning για Tabular Data}
 \begin{itemize}
-    \item Αναζήτηση flat minima
-    \item Βελτιωμένη γενίκευση
-    \item $\rho = 0.08$
+    \item Pre-trained transformer σε synthetic datasets (v2.5)
+    \item Zero-shot inference (χωρίς training στα δικά μας δεδομένα)
+    \item Περιορισμός: max 10000 samples, 500 features (v2.5)
+    \item Παρέχει ανεξάρτητη οπτική (ορθογωνικό μοντέλο)
 \end{itemize}
 \end{block}
 
-\begin{exampleblock}{Ensemble Strategy}
-Μέσος όρος πιθανοτήτων από όλα τα μοντέλα (averaging).
+\begin{exampleblock}{Στρατηγική Ensemble: NNLS Stacking}
+Συνδυασμός με Non-Negative Least Squares (όχι απλό averaging). Εύρεση βέλτιστων βαρών $w_i \geq 0$.
 \end{exampleblock}
 \end{frame}
 
-\begin{frame}{Βελτιστοποίηση \& Regularization}
+\begin{frame}{Βελτιστοποίηση \& Κανονικοποίηση (Regularization)}
 \begin{columns}[c]
 \column{0.5\textwidth}
 \textbf{Monte Carlo Ensemble:}
@@ -547,7 +540,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{columns}
 \end{frame}
 
-\begin{frame}{Advanced Techniques: Stacking}
+\begin{frame}{Προηγμένες Τεχνικές: Στοίβαξη (Stacking)}
 \begin{block}{Cross-Fit Stacking}
 \textbf{Meta-learning με OOF πιθανότητες}
 \begin{enumerate}
@@ -563,7 +556,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{exampleblock}
 \end{frame}
 
-\begin{frame}{Advanced Techniques: Self-Training}
+\begin{frame}{Προηγμένες Τεχνικές: Αυτο-Εκπαίδευση (Self-Training)}
 \begin{block}{Iterative Pseudo-Labeling}
 \textbf{Transductive Learning}
 \begin{enumerate}
@@ -578,12 +571,12 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{enumerate}
 \end{block}
 
-\begin{alertblock}{Προσοχή}
-Απαιτεί \texttt{ALLOW\_TRANSDUCTIVE=1}. Ρίσκο: test leakage.
+\begin{alertblock}{Προσοχή: Transductive Mode}
+Απαιτεί \texttt{ALLOW\_TRANSDUCTIVE=1}. Αυτό επιτρέπει τη χρήση test data για unsupervised τεχνικές (π.χ. DAE, manifold). Κίνδυνος: το visible test set μπορεί να διαφέρει από το hidden test set, οδηγώντας σε overfitting.
 \end{alertblock}
 \end{frame}
 
-\begin{frame}{Advanced Techniques: Domain Alignment}
+\begin{frame}{Προηγμένες Τεχνικές: Ευθυγράμμιση Πεδίου (Domain Alignment)}
 \begin{block}{CORAL (Covariance Alignment)}
 \textbf{Μείωση Covariate Shift}
 
@@ -618,20 +611,19 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{frame}
 
 \begin{frame}{Feature Selection (Razor)}
-\begin{block}{Μεθοδολογία}
+\begin{block}{Μεθοδολογία - Per-Model Masks}
 \begin{enumerate}
-    \item Εκπαίδευση CatBoost scout model
-    \item Υπολογισμός feature importance scores
-    \item Αφαίρεση bottom 20\% features (224 → 179)
+    \item Εκπαίδευση CatBoost \& XGBoost scout models (5-fold CV)
+    \item Υπολογισμός CV-averaged feature importance ανά μοντέλο
+    \item Δημιουργία ξεχωριστών masks: CatBoost → 179, XGBoost → 180 features
 \end{enumerate}
 \end{block}
 
 \vfill
-\begin{exampleblock}{Πλεονεκτήματα}
+\begin{exampleblock}{Εξαιρέσεις}
 \begin{itemize}
-    \item Μείωση θορύβου και overfitting
-    \item Ταχύτερη εκπαίδευση (~25\% λιγότερος χρόνος)
-    \item Πιο interpretable μοντέλα
+    \item \textbf{TabR:} Χρησιμοποιεί Quantile view (όχι Razor mask)
+    \item \textbf{TabPFN:} Χρησιμοποιεί raw data (bypasses Razor)
 \end{itemize}
 \end{exampleblock}
 \end{frame}
@@ -639,7 +631,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \begin{frame}{Hyperparameter Configuration}
 \begin{block}{Επιλεγμένες Ρυθμίσεις}
 \begin{itemize}
-    \item \textbf{Batch Size:} 2048 (μέγιστο για 6GB VRAM)
+    \item \textbf{Batch Size:} 512 (βέλτιστο για σταθερότητα σε RTX 3060)
     \item \textbf{Learning Rate:} 2e-3 με linear scaling
     \item \textbf{SAM $\rho$:} 0.08 για balance exploration/exploitation
     \item \textbf{Seeds:} 5 για Monte Carlo averaging
@@ -648,40 +640,30 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \end{block}
 
 \begin{alertblock}{Hardware Constraint}
-Βέλτιστη ρύθμιση για RTX 3060 (6GB VRAM): Batch 2048
+Βέλτιστη ρύθμιση για RTX 3060 (6GB VRAM): Batch 512 για σταθερότητα, αφήνοντας περιθώριο για TabPFN/TabR.
 \end{alertblock}
 \end{frame}
 
-\begin{frame}{Σύγκριση Αρχιτεκτονικών}
-\begin{block}{TabPFN (Baseline)}
-\begin{itemize}
-    \item Pre-trained transformer για tabular data
-    \item Περιορισμός: μέγιστο 1000 δείγματα, 100 χαρακτηριστικά
-    \item Μεμονωμένο μοντέλο, χωρίς ensemble
-\end{itemize}
-\end{block}
 
-\begin{block}{Hybrid Ensemble (Sigma-Omega)}
-\begin{itemize}
-    \item Συνδυασμός πολλαπλών μοντέλων (XGBoost, CatBoost, TabR, ThetaTabM)
-    \item Κανένας περιορισμός μεγέθους δεδομένων
-    \item Προηγμένες τεχνικές: DART, Langevin, SAM, βαθμονόμηση
-\end{itemize}
-\end{block}
-\end{frame}
 
 \begin{frame}{Μαθηματική Διατύπωση}
+\footnotesize
 \begin{block}{Συνολική Loss Function}
 \[
-\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda_1 \mathcal{L}_{\text{SAM}} + \lambda_2 \mathcal{L}_{\text{MixUp}} + \lambda_3 \mathcal{L}_{\text{DAE}}
+\mathcal{L}_{\text{total}} = \underbrace{\mathcal{L}_{\text{CE}}}_{\text{Cross-Entropy}} + \lambda_1 \underbrace{\mathcal{L}_{\text{SAM}}}_{\text{Sharpness}} + \lambda_2 \underbrace{\mathcal{L}_{\text{MixUp}}}_{\text{Consistency}} + \lambda_3 \underbrace{\mathcal{L}_{\text{DAE}}}_{\text{Reconstruction}}
 \]
+\begin{itemize}
+    \item $\mathcal{L}_{\text{CE}} = -\sum_c y_c \log \hat{y}_c$ (με label smoothing $\epsilon=0.1$)
+    \item $\mathcal{L}_{\text{SAM}}$: Perturbation $\epsilon = \rho \frac{\nabla L}{\|\nabla L\|}$, $\rho=0.08$
+    \item $\mathcal{L}_{\text{DAE}} = \|x - \text{Dec}(\text{Enc}(x + \text{noise}))\|^2$
+\end{itemize}
 \end{block}
 
-\begin{block}{Ensemble Fusion με Temperature Scaling}
+\begin{block}{NNLS Stacking \& LID Temperature Scaling}
 \[
-P_{\text{ens}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(x)}
+P_{\text{ens}}(y|x) = \text{softmax}\left(\frac{1}{T(x)} \sum_{m=1}^{M} w_m \cdot \log P_m(y|x)\right), \quad w_m \geq 0
 \]
-όπου $T(x) = 1 + \alpha \cdot \text{LID}(x)$ (adaptive temperature).
+όπου $T(x) = 1 + \alpha \cdot \text{LID}(x)$ (υψηλό LID → υψηλή θερμοκρασία → μειωμένη εμπιστοσύνη)
 \end{block}
 \end{frame}
 
@@ -710,12 +692,17 @@ P_{\text{ens}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(x)}
 \begin{frame}{Μελλοντικές Επεκτάσεις}
 \begin{columns}[c]
 \column{0.5\textwidth}
-\textbf{Τεχνικές:}
+\textbf{Υλοποιημένα:}
+\begin{itemize}
+    \item \textcolor{green!60!black}{$\checkmark$} Bayesian Optimization (Optuna με TPE sampler)
+    \item \textcolor{green!60!black}{$\checkmark$} Uncertainty Quantification (Isotonic + LID Scaling, ~0.1\% gain)
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Μελλοντικά:}
 \begin{itemize}
     \item Neural Architecture Search (NAS)
-    \item LLM Feature Extraction
-    \item Bayesian Optimization
-    \item Uncertainty Quantification
+    \item Conformal Prediction
 \end{itemize}
 
 \column{0.5\textwidth}
@@ -729,10 +716,31 @@ P_{\text{ens}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(x)}
 \end{columns}
 
 \vfill
-\begin{exampleblock}{Περιγραφή Νέων Τεχνικών}
-\textbf{NAS:} Αυτόματη εύρεση βέλτιστης αρχιτεκτονικής (layers, neurons) \\
-\textbf{LLM:} Χρήση embeddings από GPT/BERT για επιπλέον features
-\end{exampleblock}
+\footnotesize
+\textbf{Σημείωση:} LLM Feature Extraction δεν εφαρμόζεται σε ανωνυμοποιημένα αριθμητικά δεδομένα.
+\end{frame}
+
+\begin{frame}{Αποτυχημένα Μοντέλα}
+\footnotesize
+\begin{tabular}{ll}
+\toprule
+\textbf{Μοντέλο} & \textbf{Λόγος Απόρριψης} \\
+\midrule
+GANDALF & Neural Decision Tree - υψηλό ρίσκο, ισοδύναμο XGBoost \\
+KAN & Αργό \& ασταθές, θεωρητική υπόσχεση χωρίς πρακτικό όφελος \\
+TabM & Υστερεί σε diversity έναντι BatchEnsemble variant \\
+Hopular & Redundant με TabR (και τα δύο memory-based) \\
+CARTE & Απαιτεί σημασιολογικά features (strings) \\
+Mambular & Δύσκολη εγκατάσταση CUDA kernels (*πιθανώς αποτελεσματικό) \\
+DeepInsight & Tabular→Images: αργό, redundant με Manifold features \\
+AutoGluon & Generic AutoML, δεν υποστηρίζει TTT/Pseudo-labeling \\
+\bottomrule
+\end{tabular}
+
+\vfill
+\begin{alertblock}{Σημείωση}
+Η απόρριψη αφορά την \textbf{transductive φιλοσοφία} του Τελικού Μοντέλου. Τα μοντέλα μπορεί να είναι αποτελεσματικά σε άλλα contexts.
+\end{alertblock}
 \end{frame}
 
 \begin{frame}{Συμπεράσματα Μέρους Δ}
@@ -773,7 +781,7 @@ P_{\text{ens}}(y|x) = \frac{1}{Z} \sum_{m=1}^{M} w_m \cdot P_m(y|x)^{1/T(x)}
 Υλοποίηση KNN από την αρχή, βελτιστοποίηση $k$, visualization.
 \end{block}
 
-\begin{block}{Μέρος Δ: Sigma-Omega}
+\begin{block}{Μέρος Δ: Τελικό Μοντέλο}
 Υβριδική αρχιτεκτονική ensemble με προηγμένες τεχνικές βελτιστοποίησης.
 \end{block}
 \end{frame}
