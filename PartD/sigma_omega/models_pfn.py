@@ -56,9 +56,10 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         Αν υπάρχει _raw_train attribute, χρησιμοποιεί raw δεδομένα (χωρίς Razor).
         """
         try:
-            from tabpfn import TabPFNClassifier
+            from tabpfn_extensions.post_hoc_ensembles.sklearn_interface import AutoTabPFNClassifier
         except ImportError:
-            print("[TabPFN] WARNING: tabpfn not installed. Using random fallback.")
+            print("[TabPFN] WARNING: tabpfn-extensions not installed or AutoTabPFNClassifier not found. Using random fallback.")
+            print("Please install via: pip install 'tabpfn-extensions[post_hoc_ensembles]'")
             self.model_ = None
             self.classes_ = np.unique(y)
             return self
@@ -71,12 +72,16 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         # Το _raw_test χρησιμοποιείται μόνο για test predictions.
         X_use = X
             
-        # Δημιουργία TabPFNClassifier με v2.5 defaults
-        self.model_ = TabPFNClassifier(
+        # Δημιουργία AutoTabPFNClassifier (PHE)
+        # We assume n_estimators and inference_precision are less relevant for the Auto/PHE wrapper
+        # or defaults are sufficient, as it searches its own space.
+        # We introduce max_time mapping if available or default.
+        
+        self.model_ = AutoTabPFNClassifier(
             device=self.device,
-            n_estimators=self.n_estimators,
             random_state=self.random_state,
-            inference_precision=self.inference_precision,
+            max_time=300, # 5 minutes optimization budget by default
+            ignore_pretraining_limits=True 
         )
 
         # Μετατροπή σε numpy αν είναι tensor
@@ -87,8 +92,8 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         self.model_.fit(X_np, y_np)
         
         n_samples, n_features = X_np.shape
-        print(f"[TabPFN] Fitted with {n_samples} samples, {n_features} features, "
-              f"{self.n_estimators} estimators on {self.device}")
+        print(f"[TabPFN Auto] Fitted with {n_samples} samples, {n_features} features, "
+              f"on {self.device} (PHE enabled)")
 
         return self
 
