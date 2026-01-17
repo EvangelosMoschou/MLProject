@@ -78,6 +78,42 @@ def hill_climbing_optimization(oof_preds, y_true, iterations=100):
     return best_weights / best_weights.sum()
 
 
+def rank_average(preds_list):
+    """
+    Rank Averaging: Convert probs to ranks, average, convert back.
+    Robust to different model calibrations.
+    """
+    from scipy.stats import rankdata
+    
+    n_models = len(preds_list)
+    n_samples, n_classes = preds_list[0].shape
+    
+    # Rank each model's predictions per class
+    ranked = np.zeros((n_samples, n_classes))
+    for preds in preds_list:
+        for c in range(n_classes):
+            ranked[:, c] += rankdata(preds[:, c])
+    
+    # Average ranks
+    ranked /= n_models
+    
+    # Normalize to probabilities (softmax of ranks)
+    ranked = (ranked - ranked.mean(axis=1, keepdims=True)) / ranked.std(axis=1, keepdims=True)
+    e = np.exp(ranked)
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def geometric_mean(preds_list):
+    """
+    Power Average: Geometric Mean of probabilities.
+    Punishes disagreement harder than arithmetic mean.
+    """
+    preds_list = [np.clip(p, 1e-8, 1.0) for p in preds_list]
+    log_sum = np.sum([np.log(p) for p in preds_list], axis=0)
+    geo = np.exp(log_sum / len(preds_list))
+    return geo / geo.sum(axis=1, keepdims=True)
+
+
 def fit_predict_stacking(
     names_models,
     view_name,
@@ -463,6 +499,8 @@ def fit_predict_stacking(
         e_d = np.exp(d - np.max(d, axis=1, keepdims=True))
         final_probs = e_d / e_d.sum(axis=1, keepdims=True)
 
+    elif mode == 'lgbm':
+        from lightgbm import LGBMClassifier
         meta = LGBMClassifier(n_estimators=100, num_leaves=15, max_depth=3, random_state=seed, verbose=-1)
         meta.fit(meta_X, y)
         final_probs = meta.predict_proba(meta_te)
@@ -475,6 +513,14 @@ def fit_predict_stacking(
         final_probs = np.zeros_like(test_preds_running[0])
         for m_i in range(len(oof_preds)):
             final_probs += test_preds_running[m_i] * weights[m_i]
+    
+    elif mode == 'rank':
+        print("  [Meta] Using Rank Averaging...")
+        final_probs = rank_average(test_preds_running)
+        
+    elif mode == 'geo':
+        print("  [Meta] Using Geometric Mean (Power Average)...")
+        final_probs = geometric_mean(test_preds_running)
         
     else: # NNLS
         print(f"  [Meta] Using NNLS...")
@@ -489,9 +535,6 @@ def fit_predict_stacking(
         print(f"   [NNLS Weights] {weights}")
         
         final_probs = np.zeros_like(test_preds_running[0])
-        for m_i in range(n_base_models):
-            final_probs += test_preds_running[m_i] * weights[m_i]
-    
         for m_i in range(n_base_models):
             final_probs += test_preds_running[m_i] * weights[m_i]
     

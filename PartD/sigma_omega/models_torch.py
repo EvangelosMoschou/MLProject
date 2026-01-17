@@ -128,31 +128,55 @@ class TrueTabR(BaseEstimator, ClassifierMixin):
                     xb, yb, ib, wb = batch
 
                 nx = self.X_train_[train_neighbor_idx[ib.numpy()]]
-                logits = self.model(xb.to(config.DEVICE), torch.tensor(nx, dtype=torch.float32).to(config.DEVICE))
-
-                if config.LOSS_NAME == 'focal':
-                    y_onehot = F.one_hot(yb.to(config.DEVICE), num_classes=self.num_classes).float()
-                    y_onehot = smooth_targets(y_onehot, config.LABEL_SMOOTHING)
-                    probs = torch.softmax(logits, dim=1).clamp(1e-8, 1.0 - 1e-8)
-                    pt = (probs * y_onehot).sum(dim=1)
-                    loss_vec = -torch.pow(1.0 - pt, float(config.FOCAL_GAMMA)) * torch.log(pt)
-                    if class_w is not None:
-                        w_class = (y_onehot * class_w.view(1, -1)).sum(dim=1)
-                        loss_vec = loss_vec * w_class
-                    if wb is not None:
-                        loss_vec = loss_vec * wb.to(config.DEVICE)
-                    loss = loss_vec.mean()
+                
+                # [OMEGA] MixUp Regularization
+                if config.USE_MIXUP:
+                    alpha = 0.4
+                    lam = np.random.beta(alpha, alpha)
+                    lam = max(lam, 1 - lam)  # Ensure lambda >= 0.5
+                    
+                    # Shuffle indices for mixing
+                    idx_perm = torch.randperm(xb.size(0))
+                    xb_a, xb_b = xb, xb[idx_perm]
+                    yb_a, yb_b = yb, yb[idx_perm]
+                    nx_a, nx_b = nx, nx[idx_perm.numpy()]
+                    
+                    # Mix inputs
+                    xb_mix = lam * xb_a + (1 - lam) * xb_b
+                    nx_mix = lam * torch.tensor(nx_a, dtype=torch.float32) + (1 - lam) * torch.tensor(nx_b, dtype=torch.float32)
+                    
+                    logits = self.model(xb_mix.to(config.DEVICE), nx_mix.to(config.DEVICE))
+                    
+                    # Mix loss (convex combination)
+                    loss_a = F.cross_entropy(logits, yb_a.to(config.DEVICE), reduction='none', weight=class_w)
+                    loss_b = F.cross_entropy(logits, yb_b.to(config.DEVICE), reduction='none', weight=class_w)
+                    loss = (lam * loss_a + (1 - lam) * loss_b).mean()
                 else:
-                    loss_vec = F.cross_entropy(
-                        logits,
-                        yb.to(config.DEVICE),
-                        reduction='none',
-                        weight=class_w,
-                        label_smoothing=float(config.LABEL_SMOOTHING) if config.LABEL_SMOOTHING > 0 else 0.0,
-                    )
-                    if wb is not None:
-                        loss_vec = loss_vec * wb.to(config.DEVICE)
-                    loss = loss_vec.mean()
+                    logits = self.model(xb.to(config.DEVICE), torch.tensor(nx, dtype=torch.float32).to(config.DEVICE))
+
+                    if config.LOSS_NAME == 'focal':
+                        y_onehot = F.one_hot(yb.to(config.DEVICE), num_classes=self.num_classes).float()
+                        y_onehot = smooth_targets(y_onehot, config.LABEL_SMOOTHING)
+                        probs = torch.softmax(logits, dim=1).clamp(1e-8, 1.0 - 1e-8)
+                        pt = (probs * y_onehot).sum(dim=1)
+                        loss_vec = -torch.pow(1.0 - pt, float(config.FOCAL_GAMMA)) * torch.log(pt)
+                        if class_w is not None:
+                            w_class = (y_onehot * class_w.view(1, -1)).sum(dim=1)
+                            loss_vec = loss_vec * w_class
+                        if wb is not None:
+                            loss_vec = loss_vec * wb.to(config.DEVICE)
+                        loss = loss_vec.mean()
+                    else:
+                        loss_vec = F.cross_entropy(
+                            logits,
+                            yb.to(config.DEVICE),
+                            reduction='none',
+                            weight=class_w,
+                            label_smoothing=float(config.LABEL_SMOOTHING) if config.LABEL_SMOOTHING > 0 else 0.0,
+                        )
+                        if wb is not None:
+                            loss_vec = loss_vec * wb.to(config.DEVICE)
+                        loss = loss_vec.mean()
 
                 opt.zero_grad(); loss.backward(); opt.step()
 
