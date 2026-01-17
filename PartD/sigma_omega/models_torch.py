@@ -156,6 +156,11 @@ class TrueTabR(BaseEstimator, ClassifierMixin):
 
                 opt.zero_grad(); loss.backward(); opt.step()
 
+        # [FIX] Schedule-Free Optimization requires eval() to swap weights with SWA buffer
+        if hasattr(self, 'optimizer_name') and self.optimizer_name == 'schedule_free':
+             if hasattr(opt, 'eval'):
+                 opt.eval()
+
         return self
 
     def finetune_on_pseudo(self, X_pseudo, y_pseudo, epochs=1, lr_mult=0.2):
