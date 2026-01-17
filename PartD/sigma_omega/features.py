@@ -318,6 +318,44 @@ class GeometricFeatureGenerator:
         return np.hstack(feats).astype(np.float32)
 
 
+class AnomalyFeatureGenerator:
+    """
+    pathology-driven features: Row statistics and Outlier counts.
+    Helps models identify 'hard' or 'garbage' samples.
+    """
+    def __init__(self, sigma=3.0):
+        self.sigma = sigma
+        self.means = None
+        self.stds = None
+        
+    def fit(self, X, y=None):
+        self.means = np.mean(X, axis=0)
+        self.stds = np.std(X, axis=0) + 1e-9
+        return self
+        
+    def transform(self, X):
+        if self.means is None: return X
+        
+        # 1. Row Statistics
+        row_mean = np.mean(X, axis=1, keepdims=True)
+        row_std = np.std(X, axis=1, keepdims=True)
+        # kurtosis is expensive/noisy on small N_feat, skip for speed
+        
+        # 2. Outlier Count (Values > 3 sigma from col mean)
+        z_score = np.abs((X - self.means) / self.stds)
+        outliers = (z_score > self.sigma).sum(axis=1, keepdims=True)
+        
+        # 3. High-Magnitude Mean (Mean of top 10% values)
+        # Sort each row, take mean of top k
+        k = max(1, int(X.shape[1] * 0.1))
+        # partitioning is faster than full sort
+        # np.partition moves top k to right
+        top_k = np.partition(X, -k, axis=1)[:, -k:]
+        mag_mean = np.mean(top_k, axis=1, keepdims=True)
+        
+        return np.hstack([row_mean, row_std, outliers, mag_mean]).astype(np.float32)
+
+
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
     view = (view or 'raw').strip().lower()
     if view == 'raw':
@@ -641,6 +679,7 @@ def build_streams(X_v, X_test_v, y_train=None):
     pls_tr, pls_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
     gold_tr, gold_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
     geo_tr, geo_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
+    anom_tr, anom_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
 
     if y_train is not None:
         # PLS for Neural
@@ -657,13 +696,18 @@ def build_streams(X_v, X_test_v, y_train=None):
         geo = GeometricFeatureGenerator().fit(X_v, y_train)
         geo_tr = geo.transform(X_v)
         geo_te = geo.transform(X_test_v)
+        
+        # [OMEGA] Anomaly Features (Pathology)
+        anom = AnomalyFeatureGenerator().fit(X_v)
+        anom_tr = anom.transform(X_v)
+        anom_te = anom.transform(X_test_v)
 
-    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr, geo_tr])
-    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te, geo_te])
+    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr, geo_tr, anom_tr])
+    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te, geo_te, anom_te])
     
-    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden + Geometric
+    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden + Geometric + Anomaly
     # Replaced 'rec' with 'emb' (Embeddings are richer)
-    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr, geo_tr])
-    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te, geo_te])
+    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr, geo_tr, anom_tr])
+    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te, geo_te, anom_te])
     
     return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te

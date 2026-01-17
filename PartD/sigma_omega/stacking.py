@@ -8,7 +8,7 @@ from scipy.optimize import nnls
 
 from . import config
 from .losses import prob_meta_features
-from .features import apply_feature_view, build_streams, GeometricFeatureGenerator
+from .features import apply_feature_view, build_streams, GeometricFeatureGenerator, AnomalyFeatureGenerator
 from .generative import synthesize_data
 from .postprocessing import neutralize_predictions, align_probabilities
 
@@ -112,6 +112,57 @@ def geometric_mean(preds_list):
     log_sum = np.sum([np.log(p) for p in preds_list], axis=0)
     geo = np.exp(log_sum / len(preds_list))
     return geo / geo.sum(axis=1, keepdims=True)
+
+
+def optimize_class_thresholds(oof_probs, y_true):
+    """
+    Learn a weight vector W (shape n_classes) to multiply probs.
+    Maximize ACCURACY (since OOF is calibrated/soft).
+    """
+    from scipy.optimize import minimize
+    n_classes = oof_probs.shape[1]
+    
+    def loss_func(w):
+        # w is [n_classes]
+        # Weighted Probs
+        p_w = oof_probs * w
+        y_pred = np.argmax(p_w, axis=1)
+        return -np.mean(y_pred == y_true) # Minimize negative accuracy
+        
+    res = minimize(loss_func, x0=np.ones(n_classes), method='Nelder-Mead', tol=1e-4) # Nelder-Mead robust for non-diff argmax
+    print(f"   [Thresholds] Optimization Result: Acc {-res.fun:.4f} (Base: {np.mean(np.argmax(oof_probs, axis=1) == y_true):.4f})")
+    return res.x
+
+
+def ensemble_failure_analysis(preds, y_true):
+    """Print diagnostics for high-confidence errors."""
+    y_pred = np.argmax(preds, axis=1)
+    probs = np.max(preds, axis=1)
+    
+    mask_error = (y_pred != y_true)
+    mask_conf = (probs > 0.90)
+    
+    n_errors = mask_error.sum()
+    n_conf_errors = (mask_error & mask_conf).sum()
+    
+    print(f"      [DIAGNOSTICS] Total Errors: {n_errors}/{len(y_true)} ({n_errors/len(y_true):.2%})")
+    print(f"      [DIAGNOSTICS] High Confidence (>90%) Errors: {n_conf_errors}")
+    
+    if n_conf_errors > 0:
+        # Show top confusion pairs
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(y_true, y_pred)
+        np.fill_diagonal(cm, 0) # clear correct
+        # simple flattening
+        pairs = np.argwhere(cm > 0)
+        # Sort by count
+        counts = cm[pairs[:,0], pairs[:,1]]
+        sort_idx = np.argsort(-counts)
+        print("      [DIAGNOSTICS] Top Confusions (True -> Pred):")
+        for i in range(min(5, len(sort_idx))):
+            idx = sort_idx[i]
+            t, p = pairs[idx]
+            print(f"        {t} -> {p}: {counts[idx]} samples")
 
 
 def fit_predict_stacking(
@@ -305,13 +356,16 @@ def fit_predict_stacking(
                 X_f_te = X_test_raw # Full Test Raw
                 pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
                 
-                # [OMEGA] TabPFN Geometry Injection
-                # Explicitly compute Centroid Distances on RAW Data
+                # [OMEGA] TabPFN Geometry + Anomaly Injection
+                # Explicitly compute Centroid Distances + Anomalies on RAW Data
                 geo = GeometricFeatureGenerator().fit(X_tr_raw_aug, y_tr_raw_aug)
-                g_tr = geo.transform(X_tr_raw_aug)
-                g_val = geo.transform(X_val_raw_fold)
-                g_te = geo.transform(X_test_raw)
-                if pX_f is not None: gp = geo.transform(pX_f)
+                anom = AnomalyFeatureGenerator().fit(X_tr_raw_aug)
+                
+                g_tr = np.hstack([geo.transform(X_tr_raw_aug), anom.transform(X_tr_raw_aug)])
+                g_val = np.hstack([geo.transform(X_val_raw_fold), anom.transform(X_val_raw_fold)])
+                g_te = np.hstack([geo.transform(X_test_raw), anom.transform(X_test_raw)])
+                if pX_f is not None: 
+                    gp = np.hstack([geo.transform(pX_f), anom.transform(pX_f)])
                 
                 pass # Just ensuring indentation
                 
@@ -477,6 +531,28 @@ def fit_predict_stacking(
     meta_feat_te = [prob_meta_features(p) for p in test_preds_running]
     meta_X = np.hstack([meta_X] + meta_feat_oof)
     meta_te = np.hstack([meta_te] + meta_feat_te)
+    
+    # Store OOF Aggregation for Threshold Tuning
+    # Simple average for base threshold tuning? Or just use meta output?
+    # If meta-learner is used, its output (on train set via cross-val?) is complex.
+    # Stacking usually doesn't output 'train' preds.
+    # We can use the weighted average of OOF predictions as a proxy for "Ensemble OOF".
+    if mode == 'hill_climb':
+         # weights already computed.
+         oof_meta = np.zeros_like(oof_preds[0])
+         for m_i in range(len(oof_preds)):
+            oof_meta += oof_preds[m_i] * weights[m_i]
+    elif mode in ['rank', 'geo']:
+        # recalculate based on mode
+        if mode == 'rank': oof_meta = rank_average(oof_preds)
+        else: oof_meta = geometric_mean(oof_preds)
+    else:
+        # For LR/LGBM, we need to cross-val PREDICT on meta_X to get "OOF of Meta".
+        # This is nested stacking. Too complex/expensive.
+        # Fallback: Just use Hill Climb weights or Simple Average for threshold tuning base.
+        # OR: Just use simple average of OOFs.
+        print("  [Thresholds] Using Simple Average OOF for threshold learning (Meta is complex).")
+        oof_meta = np.mean(oof_preds, axis=0)
 
     # Return OOF for Tuning
     if return_oof:
@@ -538,6 +614,12 @@ def fit_predict_stacking(
         for m_i in range(n_base_models):
             final_probs += test_preds_running[m_i] * weights[m_i]
     
+    # [OMEGA] Threshold Optimization (Pre-Post-Processing)
+    # Learn on OOF, apply to Test
+    thresh_w = optimize_class_thresholds(oof_meta, y)
+    final_probs = final_probs * thresh_w
+    final_probs /= final_probs.sum(axis=1, keepdims=True)
+
     # [OMEGA] Post-Processing (The Silencer & The Equalizer)
     if config.ENABLE_POSTPROCESSING:
         # 1. Label Distribution Alignment (LDA)
@@ -546,5 +628,8 @@ def fit_predict_stacking(
         # 2. Feature Neutralization (The Silencer)
         # Neutralize against the Base View features (Test Set)
         final_probs = neutralize_predictions(final_probs, X_test_base, proportion=config.NEUTRALIZE_STRENGTH)
+
+    # [OMEGA] Failure Analysis
+    ensemble_failure_analysis(oof_meta, y)
 
     return final_probs
