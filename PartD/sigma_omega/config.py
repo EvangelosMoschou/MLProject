@@ -111,6 +111,11 @@ LID_T_MIN = _env_float('LID_T_MIN', 1.0)
 LID_T_MAX = _env_float('LID_T_MAX', 2.5)
 LID_T_POWER = _env_float('LID_T_POWER', 1.0)
 
+# Post-Processing (The Silencer & The Equalizer)
+ENABLE_POSTPROCESSING = _env_bool('ENABLE_POSTPROCESSING', True)
+NEUTRALIZE_STRENGTH = _env_float('NEUTRALIZE_STRENGTH', 0.25) # 0.0 to 1.0
+LDA_METHOD = 'prior_shift' # 'prior_shift' only currently supported
+
 # Test-time training (TTT) on "silver" samples (opt-in; transductive)
 ENABLE_TTT = _env_bool('ENABLE_TTT', False)
 TTT_GAP_LOW = _env_float('TTT_GAP_LOW', 0.10)

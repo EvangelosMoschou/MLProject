@@ -10,6 +10,7 @@ from . import config
 from .losses import prob_meta_features
 from .features import apply_feature_view, build_streams, GeometricFeatureGenerator
 from .generative import synthesize_data
+from .postprocessing import neutralize_predictions, align_probabilities
 
 def tabpfn_predict_proba(X_train, y_train, X_eval, n_ensembles=32, seed=42):
     """Prediction helper for TabPFN (Legacy/Fallback use)."""
@@ -491,4 +492,16 @@ def fit_predict_stacking(
         for m_i in range(n_base_models):
             final_probs += test_preds_running[m_i] * weights[m_i]
     
+        for m_i in range(n_base_models):
+            final_probs += test_preds_running[m_i] * weights[m_i]
+    
+    # [OMEGA] Post-Processing (The Silencer & The Equalizer)
+    if config.ENABLE_POSTPROCESSING:
+        # 1. Label Distribution Alignment (LDA)
+        final_probs = align_probabilities(final_probs, y, method=config.LDA_METHOD)
+        
+        # 2. Feature Neutralization (The Silencer)
+        # Neutralize against the Base View features (Test Set)
+        final_probs = neutralize_predictions(final_probs, X_test_base, proportion=config.NEUTRALIZE_STRENGTH)
+
     return final_probs
