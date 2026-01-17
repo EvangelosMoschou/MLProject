@@ -8,7 +8,7 @@ from scipy.optimize import nnls
 
 from . import config
 from .losses import prob_meta_features
-from .features import apply_feature_view, build_streams, GeometricFeatureGenerator, AnomalyFeatureGenerator
+from .features import apply_feature_view, build_streams, GeometricFeatureGenerator, AnomalyFeatureGenerator, ConfusionScout, find_confusion_pairs, CrossFoldFeatureGenerator
 from .generative import synthesize_data
 from .postprocessing import neutralize_predictions, align_probabilities
 
@@ -526,11 +526,30 @@ def fit_predict_stacking(
     meta_X = np.hstack(oof_preds)
     meta_te = np.hstack(test_preds_running)
     
-    # Meta Features
+    # Meta Features (Entropy, Max Prob, etc.)
     meta_feat_oof = [prob_meta_features(oof) for oof in oof_preds]
     meta_feat_te = [prob_meta_features(p) for p in test_preds_running]
-    meta_X = np.hstack([meta_X] + meta_feat_oof)
-    meta_te = np.hstack([meta_te] + meta_feat_te)
+    
+    # [OMEGA] SCOUT INJECTION (Direct 2-vs-5 Expert Knowledge)
+    # The Meta-Learner needs to know: "Is this a 2/5 confusion case?"
+    # We generate Scout probabilities on the BASE features.
+    print("  [Meta] Injecting Confusion Scout features...")
+    
+    # 1. Detect Pairs (on raw base data)
+    # Use X_train_base (could be raw/pca/etc depending on view, but raw is best for scout)
+    # Scout logic handles view data fine usually.
+    meta_pairs = find_confusion_pairs(X_train_base, y, top_k=3, seed=seed)
+    
+    # 2. Generate Scout Features (OOF for Train, Full for Test)
+    # We use CrossFoldFeatureGenerator to prevent leakage in Meta-Training
+    scout_gen = CrossFoldFeatureGenerator(ConfusionScout, pairs=meta_pairs, n_folds=5).fit(X_train_base, y)
+    
+    scout_oof = scout_gen.transform(X_train_base, y, mode='train')
+    scout_te = scout_gen.transform(X_test_base, mode='test')
+    
+    # Concatenate: [Ensemble Probs] + [Meta Stats] + [Scout Expert Opinion]
+    meta_X = np.hstack([meta_X] + meta_feat_oof + [scout_oof])
+    meta_te = np.hstack([meta_te] + meta_feat_te + [scout_te])
     
     # Store OOF Aggregation for Threshold Tuning
     # Simple average for base threshold tuning? Or just use meta output?
