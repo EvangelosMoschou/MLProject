@@ -115,6 +115,7 @@ LID_T_POWER = _env_float('LID_T_POWER', 1.0)
 ENABLE_POSTPROCESSING = _env_bool('ENABLE_POSTPROCESSING', True)
 NEUTRALIZE_STRENGTH = _env_float('NEUTRALIZE_STRENGTH', 0.25) # 0.0 to 1.0
 LDA_METHOD = 'prior_shift' # 'prior_shift' only currently supported
+CONFUSION_WEIGHT_MULTIPLIER = _env_float('CONFUSION_WEIGHT_MULTIPLIER', 2.0) # Boost sample weight for hard confusion pairs
 
 # Test-time training (TTT) on "silver" samples (opt-in; transductive)
 ENABLE_TTT = _env_bool('ENABLE_TTT', False)

@@ -420,8 +420,21 @@ def fit_predict_stacking(
                 
                 # Weights
                 w_tr_base = w_train_final if w_train_final is not None else np.ones(len(y_tr), dtype=np.float32)
+                
+                # [OMEGA] Confusion Weighting (Focus on 2 vs 5)
+                # Boost weights for classes that Scout identified as hard
+                if config.CONFUSION_WEIGHT_MULTIPLIER > 1.0:
+                    # We can use the 'meta_pairs' we detected earlier or re-detect
+                    # Re-detecting on current fold is safer
+                    fold_pairs = find_confusion_pairs(X_tr_raw, y_tr_raw, top_k=1, seed=seed)
+                    for (c_a, c_b) in fold_pairs:
+                        mask_conf = (y_tr_eff == c_a) | (y_tr_eff == c_b)
+                        if mask_conf.shape[0] == w_tr_base.shape[0]:
+                            w_tr_base[mask_conf] *= config.CONFUSION_WEIGHT_MULTIPLIER
+                            print(f"    [Weighting] Boosted weights for Class {c_a} & {c_b} (x{config.CONFUSION_WEIGHT_MULTIPLIER})")
+
                 w_p_base = pw if pw is not None else np.ones(len(py), dtype=np.float32)
-                w_train_final = np.concatenate([w_tr_base, w_p_base])
+                w_train_final = np.concatenate([w_tr_base, w_p_base]) 
 
             # FIT
             try:
