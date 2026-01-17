@@ -356,6 +356,105 @@ class AnomalyFeatureGenerator:
         return np.hstack([row_mean, row_std, outliers, mag_mean]).astype(np.float32)
 
 
+class CrossFoldFeatureGenerator:
+    """
+    Prevents leakage by generating features using K-Fold OOF.
+    Wraps another generator (e.g. PLS, Golden).
+    """
+    def __init__(self, generator_cls, n_folds=5, **kwargs):
+        self.generator_cls = generator_cls
+        self.kwargs = kwargs
+        self.n_folds = n_folds
+        self.generators = [] # List of (fold_gen, fold_idx)
+        self.full_generator = None
+
+    def fit(self, X, y):
+        self.full_generator = self.generator_cls(**self.kwargs).fit(X, y)
+        return self
+
+    def transform(self, X, y=None, mode='train'):
+        """
+        mode='train': Generates OOF features (requires y).
+        mode='test': Uses full_generator logic.
+        """
+        if mode == 'test':
+             return self.full_generator.transform(X)
+             
+        # Train Mode: Cross-Fold Generation
+        skf = StratifiedKFold(n_splits=self.n_folds, shuffle=True, random_state=42)
+        
+        # OOF Matrix
+        n_samples = len(X)
+        # Determine output dim by running on a small sample
+        dummy_gen = self.generator_cls(**self.kwargs).fit(X[:10], y[:10])
+        n_feats = dummy_gen.transform(X[:2]).shape[1]
+        
+        oof_feats = np.zeros((n_samples, n_feats), dtype=np.float32)
+        
+        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+            X_tr, y_tr = X[train_idx], y[train_idx]
+            X_val = X[val_idx]
+            
+            gen = self.generator_cls(**self.kwargs).fit(X_tr, y_tr)
+            oof_feats[val_idx] = gen.transform(X_val)
+            
+        return oof_feats
+
+
+class AdversarialDriftRemover:
+    """
+    Prunes features that drift significantly between Train and Test.
+    Train RF(X) -> {0:Train, 1:Test}. Drop if AUC > 0.7.
+    """
+    def __init__(self, threshold=0.70):
+        self.threshold = threshold
+        self.keep_mask = None
+        
+    def fit(self, X_train, X_test):
+        # Create adversarial dataset
+        n_tr = len(X_train)
+        n_te = len(X_test)
+        
+        # Downsample majority for balanced classification
+        min_n = min(n_tr, n_te)
+        idx_tr = np.random.choice(n_tr, min_n, replace=False)
+        idx_te = np.random.choice(n_te, min_n, replace=False)
+        
+        X_adv = np.vstack([X_train[idx_tr], X_test[idx_te]])
+        y_adv = np.concatenate([np.zeros(min_n), np.ones(min_n)])
+        
+        # Train simple RF
+        rf = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
+        rf.fit(X_adv, y_adv)
+        
+        # Get feature importances (proxy for drift contribution)
+        # Actually better: Use univariate AUC for each feature.
+        # RF importance is multivariate.
+        # Let's use ROC AUC for each feature individually.
+        
+        n_features = X_train.shape[1]
+        keep = []
+        
+        from sklearn.metrics import roc_auc_score
+        
+        print(f"   [DRIFT] Checking {n_features} features for drift (Threshold AUC > {self.threshold})...")
+        for i in range(n_features):
+            score = roc_auc_score(y_adv, X_adv[:, i])
+            # AUC around 0.5 is good. AUC > 0.7 or < 0.3 is bad drift.
+            auc = max(score, 1 - score)
+            if auc < self.threshold:
+                keep.append(i)
+                
+        self.keep_mask = np.array(keep)
+        print(f"   [DRIFT] Dropping {n_features - len(keep)} drifting features.")
+        return self
+        
+    def transform(self, X):
+        if self.keep_mask is None or len(self.keep_mask) == 0:
+            return X
+        return X[:, self.keep_mask]
+
+
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
     view = (view or 'raw').strip().lower()
     if view == 'raw':
