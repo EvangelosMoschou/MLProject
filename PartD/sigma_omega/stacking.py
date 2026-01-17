@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score
 from scipy.optimize import nnls
 
 from . import config
@@ -20,6 +21,60 @@ def tabpfn_predict_proba(X_train, y_train, X_eval, n_ensembles=32, seed=42):
     model = TabPFNClassifier(device=str(config.DEVICE), n_estimators=int(n_ensembles), random_state=int(seed))
     model.fit(X_train, y_train) # Fit just stores data usually
     return model.predict_proba(X_eval).astype(np.float32)
+
+
+def hill_climbing_optimization(oof_preds, y_true, iterations=100):
+    """
+    Hill Climbing for Accuracy Optimization.
+    Finds optimal weights by iteratively adding the model that maximizes accuracy.
+    """
+    n_models = len(oof_preds)
+    best_weights = np.zeros(n_models)
+    current_ensemble = np.zeros_like(oof_preds[0])
+    
+    # Initialize with best single model
+    best_acc = 0
+    best_idx = -1
+    for i in range(n_models):
+        acc = accuracy_score(y_true, np.argmax(oof_preds[i], axis=1))
+        if acc > best_acc:
+            best_acc = acc
+            best_idx = i
+            
+    current_ensemble += oof_preds[best_idx]
+    best_weights[best_idx] += 1
+    
+    print(f"   [HillClimb] Start: Model {best_idx} (Acc: {best_acc:.4f})")
+    
+    for it in range(iterations):
+        best_gain = -1
+        best_candidate = -1
+        
+        for i in range(n_models):
+            # Try adding model i
+            temp_ensemble = current_ensemble + oof_preds[i]
+            # Normalize implicitly by argmax (scale doesn't matter for hard voting)
+            # Actually for probabilities, mean is (A+B)/2. Argmax(A+B) is same as Argmax((A+B)/2).
+            # So simple addition is sufficient.
+            
+            y_pred = np.argmax(temp_ensemble, axis=1)
+            acc = accuracy_score(y_true, y_pred)
+            
+            if acc > best_acc:
+                best_gain = acc - best_acc
+                best_acc = acc
+                best_candidate = i
+        
+        if best_candidate != -1:
+            current_ensemble += oof_preds[best_candidate]
+            best_weights[best_candidate] += 1
+            # print(f"     Iter {it+1}: Added Model {best_candidate} -> Acc: {best_acc:.4f}")
+        else:
+            # Convergence
+            print(f"   [HillClimb] Converged at iter {it}. Acc: {best_acc:.4f}")
+            break
+            
+    return best_weights / best_weights.sum()
 
 
 def fit_predict_stacking(
@@ -94,23 +149,62 @@ def fit_predict_stacking(
         if sample_weight is not None:
             sw_tr = sample_weight[tr_idx]
 
-        # [OMEGA] Diffusion Augmentation
-        # Synthesize additional training samples per class to improve generalization
+        # [OMEGA] Decoupled Diffusion Augmentation
+        # 1. Augment VIEW data (for standard models)
+        X_tr_aug, y_tr_aug, sw_tr_aug = X_tr_fold, y_tr, sw_tr
+        
+        # 2. Augment RAW data (for TabPFN) - Independent Stream
+        X_tr_raw_aug, y_tr_raw_aug, sw_tr_raw_aug = X_tr_raw_fold, y_tr, sw_tr
+
         if config.ENABLE_DIFFUSION and len(X_tr_fold) > 100:
-            print(f"   [DIFFUSION] Augmenting fold training data...")
-            X_tr_fold, y_tr = synthesize_data(X_tr_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
-            # Update sample weights for augmented data
+            print(f"   [DIFFUSION] Augmenting View stream...")
+            X_tr_aug, y_tr_aug = synthesize_data(X_tr_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
+            # Weights for view stream
             if sw_tr is not None:
-                sw_aug = np.ones(len(y_tr) - len(tr_idx), dtype=np.float32) * 0.5  # Lower weight for synthetic
-                sw_tr = np.concatenate([sw_tr, sw_aug])
+                sw_diff = np.ones(len(y_tr_aug) - len(tr_idx), dtype=np.float32) * 0.5
+                sw_tr_aug = np.concatenate([sw_tr, sw_diff])
+            
+            # Independent Augmentation for RAW stream (if TabPFN is present)
+            # Check if any TabPFN model exists to avoid wasted compute
+            has_tabpfn = any('TabPFN' in m[0] for m in names_models)
+            if has_tabpfn:
+                 print(f"   [DIFFUSION] Augmenting Raw stream (for TabPFN)...")
+                 # We must use fresh synthesis on Raw data
+                 # Note: y_tr_raw_aug might differ in content/order from y_tr_aug due to random sampling!
+                 # This is fine as long as TabPFN uses (X_raw_aug, y_raw_aug) explicitly.
+                 X_tr_raw_aug, y_tr_raw_aug = synthesize_data(X_tr_raw_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
+                 if sw_tr is not None:
+                    sw_diff = np.ones(len(y_tr_raw_aug) - len(tr_idx), dtype=np.float32) * 0.5
+                    sw_tr_raw_aug = np.concatenate([sw_tr, sw_diff])
+            
+            import gc; gc.collect()
+        
+        # NOTE: Updates 'X_tr_fold' to be the augmented version for build_streams?
+        # NO. build_streams expects Reference info. 
+        # Usually we build streams on the NON-augmented data (to learn manifolds correctly from real dist) 
+        # or augmented? 
+        # Existing code used 'X_tr_fold' (which was overwritten).
+        # Let's keep consistency: Feature/Manifold calculation on Real+Augmented?
+        # Computing manifold on synthetic data might be noisy.
+        # SAFE BET: Build streams on REAL data (X_tr_fold), then apply to Augmented?
+        # Complexity: The synthetic data needs features too.
+        # If we synthesized Features directly (which we did, X_tr_aug is features), then we don't need build_streams on them?
+        # Wait, 'X_tr_fold' is 'X_tr_view' (PCA/Quantile/Raw).
+        # synthesizing it gives more PCA/Quantile samples.
+        # BUT `build_streams` adds DAE/Manifold features. 
+        # If we synthesize View, we can't easily get DAE features for them unless we run DAE on synthetic views.
+        # The standard pipeline: View -> Augment -> DAE/Streams.
+        # So we should pass X_tr_aug to build_streams if we want features for them.
         
         # 2. BUILD STREAMS (Local)
-        # We need streams for Train and Val
-        # X_tr_fold -> build_streams -> X_tree_tr, X_neural_tr
-        X_tree_tr, X_tree_val, X_neural_tr, X_neural_val, _, _ = build_streams(X_tr_fold, X_val_fold)
+        # We use X_tr_aug (View Augmented) for standard models.
+        # For TabPFN, we don't use streams (it uses Raw), so we ignore streams for it.
+        X_tree_tr, X_tree_val, X_neural_tr, X_neural_val, _, _ = build_streams(X_tr_aug, X_val_fold, y_train=y_tr_aug)
         
-        # Test streams: using X_tr_fold as reference
-        _, X_tree_te_fold, _, X_neural_te_fold, _, _ = build_streams(X_tr_fold, X_test_view_fold)
+        # Test streams: using X_tr_aug as reference? Or X_tr_fold (real)?
+        # Using Real data as reference for Test manifold is usually safer/better.
+        # But let's stick to X_tr_aug to match training distribution representation.
+        _, X_tree_te_fold, _, X_neural_te_fold, _, _ = build_streams(X_tr_aug, X_test_view_fold, y_train=y_tr_aug)
         
         # 3. PREPARE PSEUDO
         pX_tree = None
@@ -147,20 +241,40 @@ def fit_predict_stacking(
             
             # SVM: Use view-only features (no manifold streams - SVM struggles with high-dim)
             if is_svm:
-                X_f_tr = X_tr_fold  # View features only (post-augmentation)
-                X_f_val = X_val_fold
+                X_f_tr = X_tr_aug  # SVM uses View Aug
+                y_tr_eff_model = y_tr_aug
+                sw_tr_eff_model = sw_tr_aug
+                
+                X_f_val = X_val_fold # Val is always Real
                 X_f_te = X_test_view_fold
                 pX_f = X_test_view_fold[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
+            
+            # TabPFN: Use RAW AUG logic
+            elif is_tabpfn:
+                # TabPFN uses Independent Raw Augmentation stream
+                X_f_tr = X_tr_raw_aug
+                y_tr_eff_model = y_tr_raw_aug
+                sw_tr_eff_model = sw_tr_raw_aug
+                
+                # Val/Test must be RAW Real
+                X_f_val = X_val_raw_fold
+                X_f_te = X_test_raw # Full Test Raw
+                pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
+                
             else:
+                # Standard Tree/Neural Streams (Built from X_tr_aug)
                 X_f_tr = X_tree_tr if is_tree else X_neural_tr
+                y_tr_eff_model = y_tr_aug
+                sw_tr_eff_model = sw_tr_aug
+                
                 X_f_val = X_tree_val if is_tree else X_neural_val
                 X_f_te = X_tree_te_fold if is_tree else X_neural_te_fold
                 pX_f = pX_tree if is_tree else pX_neural
             
             # Concatenate Pseudo if active
             X_train_final = X_f_tr
-            y_train_final = y_tr
-            w_train_final = sw_tr
+            y_train_final = y_tr_eff_model
+            w_train_final = sw_tr_eff_model
             
             if pX_f is not None:
                 # Handle Concatenation & Label Types
@@ -326,11 +440,18 @@ def fit_predict_stacking(
         e_d = np.exp(d - np.max(d, axis=1, keepdims=True))
         final_probs = e_d / e_d.sum(axis=1, keepdims=True)
 
-    elif mode == 'lgbm':
-        from lightgbm import LGBMClassifier
         meta = LGBMClassifier(n_estimators=100, num_leaves=15, max_depth=3, random_state=seed, verbose=-1)
         meta.fit(meta_X, y)
         final_probs = meta.predict_proba(meta_te)
+        
+    elif mode == 'hill_climb':
+        print("  [Meta] Using Hill Climbing Optimization (Accuracy)...")
+        weights = hill_climbing_optimization(oof_preds, y, iterations=200)
+        print(f"   [HillClimb Weights] {weights}")
+        
+        final_probs = np.zeros_like(test_preds_running[0])
+        for m_i in range(len(oof_preds)):
+            final_probs += test_preds_running[m_i] * weights[m_i]
         
     else: # NNLS
         print(f"  [Meta] Using NNLS...")
