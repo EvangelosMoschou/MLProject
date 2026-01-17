@@ -446,7 +446,7 @@ def fit_predict_stacking(
         
     elif mode == 'hill_climb':
         print("  [Meta] Using Hill Climbing Optimization (Accuracy)...")
-        weights = hill_climbing_optimization(oof_preds, y, iterations=200)
+        weights = hill_climbing_optimization(oof_preds, y, iterations=100)
         print(f"   [HillClimb Weights] {weights}")
         
         final_probs = np.zeros_like(test_preds_running[0])

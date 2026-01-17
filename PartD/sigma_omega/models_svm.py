@@ -102,4 +102,4 @@ class SVMWrapper(BaseEstimator, ClassifierMixin):
 
 def get_svm(random_state=42):
     """Factory for the optimized SVM."""
-    return SVMWrapper(n_components=400, k_best=128, random_state=random_state)
+    return SVMWrapper(n_components=400, k_best=64, random_state=random_state)

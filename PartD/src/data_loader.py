@@ -41,6 +41,10 @@ def load_data(train_path=None, test_path=None):
         print(f"Loading data from: {train_path} and {test_path}")
         train_df = pd.read_csv(train_path, header=None)
         
+        # [OMEGA] Explicit Column Naming
+        n_cols = train_df.shape[1]
+        train_df.columns = [f"feat_{i}" for i in range(n_cols - 1)] + ["target"]
+        
         # [REFACTOR] Explicit targeting
         # Blindly slicing -1 is dangerous if CSV structure changes.
         # Prefer config.TARGET_COL if available, else -1.
