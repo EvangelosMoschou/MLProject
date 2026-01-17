@@ -266,7 +266,7 @@ def main():
     print(f"\n[SUCCESS] OOF cache saved to {output_path}")
     print(f"  - Seeds: {config.SEEDS}")
     print(f"  - Views: {config.VIEWS}")
-    print(f"  - Models per view: {len(names_models)}")
+    print(f"  - Models per view: {len(model_definitions)}")
     print("\nNext step: Run run_stacking_tuning.py to tune meta-learner")
 
 
