@@ -54,16 +54,41 @@ def fit_predict_stacking(
     print(f"  [STACKING] Cross-Validation ({cv_splits} folds) | View: {view_name} | Models: {len(names_models)}")
     
     # Transform View (Split handled inside loop usually for strict correctness, but optimization allows global transform if transductive)
-    # apply_feature_view handles transductive check
-    X_tr_view, X_test_view_fold = apply_feature_view(
-        X_train_base, X_test_base, view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
-    )
+    # [FIX] Moved inside loop to prevent leakage unless transductive logic is explicitly allowed.
+    # We still need a reference for SKF split.
     
-    for tr_idx, val_idx in skf.split(X_tr_view, y):
-        # 1. SPLIT DATA
-        X_tr_fold = X_tr_view[tr_idx]
-        X_val_fold = X_tr_view[val_idx]
+    for tr_idx, val_idx in skf.split(X_train_base, y):
+        # 1. SPLIT DATA (RAW)
+        X_tr_raw_fold = X_train_base[tr_idx]
+        X_val_raw_fold = X_train_base[val_idx]
         y_tr = y[tr_idx]
+
+        # 2. APPLY VIEW & ENGINEERING (Inside Fold)
+        # Check leakage warning if transductive is ON
+        if config.ALLOW_TRANSDUCTIVE:
+             pass # Warning printed in apply_feature_view usually, or accepted risk.
+        
+        # Fit on Fold Train, Transform Fold Val & Test
+        X_tr_fold, X_val_fold = apply_feature_view(
+            X_tr_raw_fold, X_val_raw_fold, view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
+        )
+        
+        # We also need to transform the FULL Test set based on this Fold's pipeline?
+        # Standard Stacking: Use the model trained on this fold to predict on the FULL test set.
+        # But the Feature Pipeline (PCA/Quantile) needs to be consistent.
+        # Correct Approach: Fit pipeline on X_tr_raw_fold, transform X_test_base.
+        # apply_feature_view returns (X_train, X_validation/test).
+        # We need a 3-way split helper or call it twice?
+        # apply_feature_view signature: (X_train, X_test, ...)
+        
+        # Call 1: Train/Val
+        # Done above.
+        
+        # Call 2: Train/TestFull (To get X_test_view_fold consistent with this fold's scaler/pca)
+        # Re-fitting on X_tr_raw_fold is necessary.
+        _, X_test_view_fold = apply_feature_view(
+             X_tr_raw_fold, X_test_base, view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
+        )
         
         sw_tr = None
         if sample_weight is not None:
