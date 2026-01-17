@@ -20,68 +20,102 @@ def main():
     y_enc = le.fit_transform(y)
     num_classes = len(le.classes_)
 
+    # >>> ADVERSARIAL VALIDATION DIAGNOSTIC <<<
+    # Checks for train/test distribution shift before training
+    if config.RUN_ADV_DIAGNOSTIC:
+        print("\n[ADV DIAGNOSTIC] Checking train/test distribution shift...")
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import cross_val_score
+        
+        X_all = np.vstack([X, X_test])
+        y_dom = np.concatenate([np.zeros(len(X)), np.ones(len(X_test))])
+        
+        adv_clf = LogisticRegression(max_iter=1000, solver='lbfgs')
+        auc_scores = cross_val_score(adv_clf, X_all, y_dom, cv=5, scoring='roc_auc')
+        mean_auc = np.mean(auc_scores)
+        
+        if mean_auc < 0.55:
+            print(f"  ✓ AUC = {mean_auc:.3f} (No significant distribution shift detected)")
+        elif mean_auc < 0.70:
+            print(f"  ⚠ AUC = {mean_auc:.3f} (Mild distribution shift - consider CORAL alignment)")
+        else:
+            print(f"  ⚠ AUC = {mean_auc:.3f} (SIGNIFICANT shift - enable ENABLE_ADV_REWEIGHT=1)")
+        print("")
+
     # Per-Model CV Razor (5-Fold CV-averaged importance)
-    print("[RAZOR] Computing per-model CV-averaged feature importance...")
-    from catboost import CatBoostClassifier
-    from sklearn.model_selection import StratifiedKFold
-    import xgboost as xgb
-    
-    n_splits = 5
-    razor_iterations = 500  # More iterations for stable importance
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    
-    # --- CatBoost CV Importance ---
-    cat_importances = []
-    print("  [CatBoost] Computing 5-fold CV importance...")
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
-        scout = CatBoostClassifier(
-            iterations=razor_iterations, 
-            verbose=0, 
-            task_type='GPU' if torch.cuda.is_available() else 'CPU',
-            random_seed=42 + fold_idx
-        )
-        scout.fit(X[train_idx], y_enc[train_idx])
-        cat_importances.append(scout.get_feature_importance())
-    cat_imp_avg = np.mean(cat_importances, axis=0)
-    
-    # --- XGBoost CV Importance ---
-    xgb_importances = []
-    print("  [XGBoost] Computing 5-fold CV importance...")
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
-        xgb_model = xgb.XGBClassifier(
-            n_estimators=razor_iterations,
-            max_depth=6,
-            learning_rate=0.1,
-            tree_method='hist',
-            device='cuda' if torch.cuda.is_available() else 'cpu',
-            random_state=42 + fold_idx,
-            verbosity=0,
-        )
-        xgb_model.fit(X[train_idx], y_enc[train_idx])
-        xgb_importances.append(xgb_model.feature_importances_)
-    xgb_imp_avg = np.mean(xgb_importances, axis=0)
-    
-    # --- Create Model-Specific Masks ---
-    razor_threshold = 10  # Bottom 10%
-    cat_thresh = np.percentile(cat_imp_avg, razor_threshold)
-    xgb_thresh = np.percentile(xgb_imp_avg, razor_threshold)
-    
-    cat_mask = cat_imp_avg > cat_thresh
-    xgb_mask = xgb_imp_avg > xgb_thresh
-    
-    # For backward compatibility, use CatBoost mask as default
-    keep_mask = cat_mask
-    X_razor = X[:, keep_mask]
-    X_test_razor = X_test[:, keep_mask]
-    
-    print(f"  > CatBoost mask: {np.sum(cat_mask)}/{X.shape[1]} features kept")
-    print(f"  > XGBoost mask: {np.sum(xgb_mask)}/{X.shape[1]} features kept")
-    
-    # Store masks for per-model use in pipeline
-    razor_masks = {
-        'cat': cat_mask,
-        'xgb': xgb_mask,
-    }
+    if config.ENABLE_RAZOR:
+        print("[RAZOR] Computing per-model CV-averaged feature importance...")
+        from catboost import CatBoostClassifier
+        from sklearn.model_selection import StratifiedKFold
+        import xgboost as xgb
+        
+        n_splits = 5
+        razor_iterations = 500  # More iterations for stable importance
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        
+        # --- CatBoost CV Importance ---
+        cat_importances = []
+        print("  [CatBoost] Computing 5-fold CV importance...")
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
+            scout = CatBoostClassifier(
+                iterations=razor_iterations, 
+                verbose=0, 
+                task_type='GPU' if torch.cuda.is_available() else 'CPU',
+                random_seed=42 + fold_idx
+            )
+            scout.fit(X[train_idx], y_enc[train_idx])
+            cat_importances.append(scout.get_feature_importance())
+        cat_imp_avg = np.mean(cat_importances, axis=0)
+        
+        # --- XGBoost CV Importance ---
+        xgb_importances = []
+        print("  [XGBoost] Computing 5-fold CV importance...")
+        for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y_enc)):
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=razor_iterations,
+                max_depth=6,
+                learning_rate=0.1,
+                tree_method='hist',
+                device='cuda' if torch.cuda.is_available() else 'cpu',
+                random_state=42 + fold_idx,
+                verbosity=0,
+            )
+            xgb_model.fit(X[train_idx], y_enc[train_idx])
+            xgb_importances.append(xgb_model.feature_importances_)
+        xgb_imp_avg = np.mean(xgb_importances, axis=0)
+        
+        # --- Create Model-Specific Masks ---
+        razor_threshold = 10  # Bottom 10%
+        cat_thresh = np.percentile(cat_imp_avg, razor_threshold)
+        xgb_thresh = np.percentile(xgb_imp_avg, razor_threshold)
+        
+        cat_mask = cat_imp_avg > cat_thresh
+        xgb_mask = xgb_imp_avg > xgb_thresh
+        
+        # For backward compatibility, use CatBoost mask as default
+        keep_mask = cat_mask
+        X_razor = X[:, keep_mask]
+        X_test_razor = X_test[:, keep_mask]
+        
+        print(f"  > CatBoost mask: {np.sum(cat_mask)}/{X.shape[1]} features kept")
+        print(f"  > XGBoost mask: {np.sum(xgb_mask)}/{X.shape[1]} features kept")
+        
+        # Store masks for per-model use in pipeline
+        razor_masks = {
+            'cat': cat_mask,
+            'xgb': xgb_mask,
+        }
+    else:
+        print("[RAZOR] Skipping feature selection (Max Signal Mode)...")
+        # Keep all features
+        all_mask = np.ones(X.shape[1], dtype=bool)
+        X_razor = X
+        X_test_razor = X_test
+        razor_masks = {
+            'cat': all_mask,
+            'xgb': all_mask,
+        }
+        print(f"  > All {X.shape[1]} features kept.")
 
     # 2. MONTE CARLO LOOP
     final_ensemble_probs = 0

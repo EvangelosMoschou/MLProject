@@ -24,14 +24,17 @@ import torch
 from sklearn.preprocessing import LabelEncoder
 
 # Add parent to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path hack usually causes issues when running with -m
+# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sigma_omega import config
-from sigma_omega.data import load_data_safe
-from sigma_omega.pipeline import predict_probs_for_view
-from sigma_omega.stacking import fit_predict_stacking
-from sigma_omega.features import apply_feature_view, build_streams
-from sigma_omega.utils import seed_everything
+from .. import config
+from ..data import load_data_safe
+from ..pipeline import predict_probs_for_view
+from ..stacking import fit_predict_stacking
+from ..features import apply_feature_view, build_streams
+from ..utils import seed_everything
+# legacy/imports need fixing too downstream?
+# models imports below need fixing too
 
 def main():
     print(">>> OOF GENERATION FOR META-LEARNER TUNING <<<")
@@ -136,9 +139,10 @@ def main():
     all_test_preds = {}
     
     # Import model factories - MOVED HERE TO FIX NAME ERROR
-    from sigma_omega.models_trees import get_xgb_dart, get_cat_langevin
-    from sigma_omega.models_torch import TrueTabR
-    from sigma_omega.models_pfn import TabPFNWrapper
+    # Import model factories - MOVED HERE TO FIX NAME ERROR
+    from ..models_trees import get_xgb_dart, get_cat_langevin
+    from ..models_torch import TrueTabR
+    from ..models_pfn import TabPFNWrapper
     
     for seed in config.SEEDS:
         print(f"\n>>> SEED {seed} <<<")
@@ -175,6 +179,13 @@ def main():
                 # Instantiate
                 model_instance = factory()
                 
+                # [Optimization] Skip Trees on PCA/ICA views
+                # Trees work best on axis-aligned data; rotations hurt them.
+                is_tree = ('XGB' in name or 'Cat' in name or 'LGBM' in name)
+                if is_tree and view not in ['raw', 'quantile']:
+                    print(f"    [SKIP] Skipping {name} on {view} (Trees dislike rotations)")
+                    continue
+
                 # Select Data
                 X_tr_use = X if use_full_data else X_razor
                 X_te_use = X_test if use_full_data else X_test_razor

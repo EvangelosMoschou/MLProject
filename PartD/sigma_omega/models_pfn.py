@@ -11,7 +11,10 @@ in-context learning. Η έκδοση 2.5 υποστηρίζει:
 """
 
 import numpy as np
+import torch
+import gc
 from sklearn.base import BaseEstimator, ClassifierMixin
+from . import config
 
 
 class TabPFNWrapper(BaseEstimator, ClassifierMixin):
@@ -57,9 +60,10 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         """
         try:
             from tabpfn_extensions.post_hoc_ensembles.sklearn_interface import AutoTabPFNClassifier
-        except ImportError:
-            print("[TabPFN] WARNING: tabpfn-extensions not installed or AutoTabPFNClassifier not found. Using random fallback.")
-            print("Please install via: pip install 'tabpfn-extensions[post_hoc_ensembles]'")
+            from tabpfn import TabPFNClassifier as BaseTabPFN
+        except Exception as e:
+            print(f"[TabPFN] WARNING: Failed to import AutoTabPFNClassifier. Error: {type(e).__name__}: {e}")
+            print("Using random fallback.")
             self.model_ = None
             self.classes_ = np.unique(y)
             return self
@@ -72,16 +76,29 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         # Το _raw_test χρησιμοποιείται μόνο για test predictions.
         X_use = X
             
-        # Δημιουργία AutoTabPFNClassifier (PHE)
-        # We assume n_estimators and inference_precision are less relevant for the Auto/PHE wrapper
-        # or defaults are sufficient, as it searches its own space.
-        # We introduce max_time mapping if available or default.
+        # Δημιουργία custom TabPFN base models με memory_saving_mode
+        # This reduces peak VRAM by ~50-70% by internally batching attention
+        n_base_models = 8
+        custom_models = [
+            (f"tabpfn_memsave_{i}", BaseTabPFN(
+                device=self.device,
+                memory_saving_mode=True,  # <-- Key: internal memory optimization
+                random_state=self.random_state + i,
+                ignore_pretraining_limits=True,
+                n_estimators=4,  # internal ensemble per base model
+            ))
+            for i in range(n_base_models)
+        ]
         
         self.model_ = AutoTabPFNClassifier(
             device=self.device,
             random_state=self.random_state,
-            max_time=300, # 5 minutes optimization budget by default
-            ignore_pretraining_limits=True 
+            max_time=config.TABPFN_MAX_TIME, 
+            ignore_pretraining_limits=True,
+            phe_init_args={
+                'tabpfn_base_model_source': 'custom',
+                'custom_tabpfn_models': custom_models,
+            },
         )
 
         # Μετατροπή σε numpy αν είναι tensor
@@ -89,7 +106,42 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
         y_np = self._to_numpy(y)
 
         # Fit (αποθηκεύει δεδομένα για in-context learning)
-        self.model_.fit(X_np, y_np)
+        # Handle OOM by falling back to CPU
+        try:
+            self.model_.fit(X_np, y_np)
+        except torch.cuda.OutOfMemoryError:
+            print(f"[TabPFN Auto] CUDA OOM detected on {self.device}. Falling back to CPU (using system RAM).")
+            # Cleanup
+            self.model_ = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            
+            # Re-initialize on CPU with memory-optimized models
+            from tabpfn import TabPFNClassifier as BaseTabPFN
+            cpu_models = [
+                (f"tabpfn_cpu_{i}", BaseTabPFN(
+                    device='cpu',
+                    memory_saving_mode=True,
+                    random_state=self.random_state + i,
+                    ignore_pretraining_limits=True,
+                    n_estimators=4,
+                ))
+                for i in range(n_base_models)
+            ]
+            self.model_ = AutoTabPFNClassifier(
+                device='cpu',
+                random_state=self.random_state,
+                max_time=config.TABPFN_MAX_TIME,
+                ignore_pretraining_limits=True,
+                phe_init_args={
+                    'tabpfn_base_model_source': 'custom',
+                    'custom_tabpfn_models': cpu_models,
+                },
+            )
+            self.model_.fit(X_np, y_np)
+            # Update internal device tracker
+            self.device = 'cpu'
         
         n_samples, n_features = X_np.shape
         print(f"[TabPFN Auto] Fitted with {n_samples} samples, {n_features} features, "
@@ -100,17 +152,56 @@ class TabPFNWrapper(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         """
         Πρόβλεψη πιθανοτήτων για κάθε κλάση.
+        Adaptive batch size: reduces on OOM until prediction succeeds.
         """
         if self.model_ is None:
             # Fallback: τυχαίες πιθανότητες
             return np.ones((len(X), len(self.classes_))) / len(self.classes_)
 
-        # Σημείωση: Πρέπει να χρησιμοποιήσουμε τα ίδια features με το training.
-        # Δεν χρησιμοποιούμε _raw_test γιατί η stacking προσθέτει manifold/DAE features.
         X_np = self._to_numpy(X)
         
-        # TabPFN v2.5 χειρίζεται batching εσωτερικά
-        probs = self.model_.predict_proba(X_np)
+        # Adaptive batching with OOM fallback
+        batch_size = 128
+        min_batch_size = 1
+        probs_list = []
+        i = 0
+        
+        while i < len(X_np):
+            X_batch = X_np[i : i + batch_size]
+            
+            try:
+                p_batch = self.model_.predict_proba(X_batch)
+                probs_list.append(p_batch)
+                i += batch_size
+                
+                # Cleanup every few batches
+                if len(probs_list) % 5 == 0:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        
+            except torch.cuda.OutOfMemoryError:
+                # OOM: reduce batch size
+                del X_batch
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+                new_batch_size = max(min_batch_size, batch_size // 2)
+                if new_batch_size == batch_size:
+                    # Already at minimum, cannot reduce further
+                    print(f"[TabPFN] FATAL: CUDA OOM at batch_size={batch_size}. Consider rerunning with device='cpu'.")
+                    raise
+                
+                print(f"[TabPFN] CUDA OOM at batch_size={batch_size}. Reducing to {new_batch_size}.")
+                batch_size = new_batch_size
+                # Don't increment i, retry this batch with smaller size
+        
+        probs = np.concatenate(probs_list, axis=0)
+        
+        # Final cleanup
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         return probs
 

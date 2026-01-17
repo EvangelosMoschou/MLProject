@@ -42,7 +42,7 @@ from PartD.sigma_omega.losses import prob_meta_features
 
 # Paths
 OUTPUT_DIR = Path(__file__).parent / "outputs"
-OOF_CACHE_PATH = OUTPUT_DIR / "oof_cache.npz"
+OOF_CACHE_PATH = OUTPUT_DIR / "oof_cache_phe.npz" # New cache for PHE experiments
 RESULTS_PATH = OUTPUT_DIR / "meta_learner_results.json"
 STORAGE_URL = f"sqlite:///{OUTPUT_DIR / 'nas.db'}"
 
@@ -115,9 +115,15 @@ def generate_oof_predictions(X: np.ndarray, y: np.ndarray, num_classes: int) -> 
             model = copy.deepcopy(model_template)
             
             # Select appropriate feature streams
-            is_tree = 'XGB' in name or 'Cat' in name
-            X_f_tr = X_tree_tr if is_tree else X_neural_tr
-            X_f_val = X_tree_val if is_tree else X_neural_val
+            if 'TabPFN' in name:
+                # TabPFN v2 prefers raw data (no quantile transform)
+                # We simply slice the original raw X
+                X_f_tr = X[tr_idx]
+                X_f_val = X[val_idx]
+            else:
+                is_tree = 'XGB' in name or 'Cat' in name
+                X_f_tr = X_tree_tr if is_tree else X_neural_tr
+                X_f_val = X_tree_val if is_tree else X_neural_val
             
             try:
                 model.fit(X_f_tr, y_tr)

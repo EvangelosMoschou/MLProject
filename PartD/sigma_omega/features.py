@@ -13,6 +13,84 @@ from . import config
 from .domain import coral_align
 from scipy.special import erfinv
 from sklearn.linear_model import LogisticRegression
+from sklearn.cluster import KMeans
+
+
+def gpu_laplacian_eigenmaps(X, n_components=8, k=20, device=None):
+    """
+    GPU-accelerated Laplacian Eigenmaps using torch.lobpcg.
+    
+    Algorithm:
+    1. Build k-NN adjacency graph (CPU, sklearn)
+    2. Compute normalized Laplacian: L = I - D^{-1/2} A D^{-1/2}
+    3. Use torch.lobpcg(largest=False) for smallest eigenvectors
+    
+    Args:
+        X: Input data (n_samples, n_features)
+        n_components: Number of embedding dimensions
+        k: Number of neighbors for graph construction
+        device: Torch device (defaults to config.DEVICE)
+    
+    Returns:
+        embedding: (n_samples, n_components) numpy array
+    """
+    if device is None:
+        device = config.DEVICE
+    
+    n = X.shape[0]
+    k_eff = min(k, n - 1)
+    
+    # 1. Build symmetric k-NN adjacency (CPU)
+    A_sparse = kneighbors_graph(X, k_eff, mode='connectivity', include_self=False)
+    A_sparse = (A_sparse + A_sparse.T) / 2  # Symmetrize
+    A_sparse = A_sparse.tocoo()
+    
+    # 2. Convert to torch sparse tensor
+    indices = torch.tensor(np.vstack([A_sparse.row, A_sparse.col]), dtype=torch.long, device=device)
+    values = torch.tensor(A_sparse.data, dtype=torch.float32, device=device)
+    A = torch.sparse_coo_tensor(indices, values, (n, n)).coalesce()
+    
+    # 3. Compute degree and normalized Laplacian: L = I - D^{-1/2} A D^{-1/2}
+    deg = torch.sparse.sum(A, dim=1).to_dense()
+    deg_inv_sqrt = torch.where(deg > 0, deg.pow(-0.5), torch.zeros_like(deg))
+    
+    # D^{-1/2} A D^{-1/2} as sparse matrix
+    row, col = A.indices()
+    scaled_vals = A.values() * deg_inv_sqrt[row] * deg_inv_sqrt[col]
+    A_norm = torch.sparse_coo_tensor(A.indices(), scaled_vals, (n, n)).coalesce()
+    
+    # L = I - A_norm (construct as linear operator for lobpcg)
+    def laplacian_mv(v):
+        # L @ v = v - A_norm @ v
+        return v - torch.sparse.mm(A_norm, v)
+    
+    # 4. Use torch.lobpcg for smallest eigenvectors
+    #    Request n_components+1 to skip the trivial all-ones eigenvector
+    n_req = min(n_components + 1, n - 1)
+    X0 = torch.randn(n, n_req, device=device, dtype=torch.float32)
+    
+    # Create identity-like sparse for lobpcg (it needs a matrix, not a function)
+    # Build L explicitly as sparse: L = I - A_norm
+    I_indices = torch.arange(n, device=device).unsqueeze(0).repeat(2, 1)
+    I_values = torch.ones(n, device=device, dtype=torch.float32)
+    I_sparse = torch.sparse_coo_tensor(I_indices, I_values, (n, n)).coalesce()
+    
+    L = I_sparse - A_norm
+    L = L.coalesce()
+    
+    # torch.lobpcg expects dense or sparse, largest=False for smallest eigenvalues
+    eigenvalues, eigenvectors = torch.lobpcg(L.to_dense(), k=n_req, largest=False, niter=100)
+    
+    # Skip the first (near-zero) eigenvalue, take next n_components
+    embedding = eigenvectors[:, 1:n_components + 1].cpu().numpy()
+    
+    # Handle case where we got fewer than requested
+    if embedding.shape[1] < n_components:
+        padding = np.zeros((n, n_components - embedding.shape[1]))
+        embedding = np.hstack([embedding, padding])
+    
+    return embedding
+
 
 class RankGaussScaler:
     def fit(self, X, y=None): return self
@@ -53,9 +131,29 @@ class StabilitySelector:
         print(f"   [SELECTOR] Kept {np.sum(self.support_)} features.")
         return self
     
+
     def transform(self, X): 
         if self.support_ is None: return X
         return X[:, self.support_]
+
+class KMeansFeaturizer:
+    """
+    Generates cluster-distance features.
+    Trees love these as they provide 'global' location context.
+    """
+    def __init__(self, n_clusters=16, seed=42):
+        self.n_clusters = n_clusters
+        self.seed = seed
+        self.kmeans = None
+        
+    def fit(self, X):
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.seed, n_init='auto')
+        self.kmeans.fit(X)
+        return self
+
+    def transform(self, X):
+        if self.kmeans is None: return X
+        return self.kmeans.transform(X).astype(np.float32)
 
 
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
@@ -131,6 +229,24 @@ class TransductiveDAE(nn.Module):
 
     def forward(self, x):
         return self.decoder(self.encoder(x))
+
+
+def swap_noise(x, p=0.15):
+    """
+    Applies Swap Noise (DAE gold standard).
+    Replaces values with random values from the same column within the batch.
+    """
+    n, d = x.shape
+    device = x.device
+    target_idx = torch.randperm(n, device=device)
+    # Mask: 1 means swap, 0 means keep
+    mask = (torch.rand(x.shape, device=device) < p).float()
+    
+    x_new = x.clone()
+    for c in range(d):
+        perm = torch.randperm(n, device=device)
+        x_new[:, c] = torch.where(mask[:, c] == 1, x[perm, c], x[:, c])
+    return x_new
 
 
 class TabularDiffusion(nn.Module):
@@ -225,8 +341,10 @@ class DataRefinery:
         self.dae.train()
         for _ in range(int(epochs)):
             for (xb,) in dl:
-                noise = torch.randn_like(xb) * float(noise_std)
-                rec = self.dae(xb + noise)
+                # [OMEGA] Swap Noise Upgrade
+                # Gaussian noise is bad for tabular (smears distributions). Swap noise preserves marginals.
+                xb_noisy = swap_noise(xb, p=float(noise_std) if noise_std > 0.5 else 0.15)
+                rec = self.dae(xb_noisy)
                 loss = crit(rec, xb)
                 opt.zero_grad(); loss.backward(); opt.step()
         return self
@@ -278,14 +396,26 @@ def compute_manifold_features(X_train, X_test, allow_transductive=False, k=None,
 
         # Laplacian Eigenmaps (geometry unfolding)
         if config.ENABLE_LAPLACIAN:
-            try:
-                n_components = min(8, len(X_all) - 2)
-                se = SpectralEmbedding(n_components=n_components, n_neighbors=k, n_jobs=-1, random_state=42)
-                laplacian = se.fit_transform(X_all)
-                print(f"   [MANIFOLD] Laplacian Eigenmaps: {n_components} components")
-            except Exception as e:
-                print(f"   [MANIFOLD] Laplacian failed: {e}")
-                laplacian = np.zeros((len(X_all), 8))
+            n_components = min(8, len(X_all) - 2)
+            laplacian = None
+            
+            # Try GPU path first
+            if config.USE_GPU_EIGENMAPS and config.DEVICE.type == 'cuda':
+                try:
+                    laplacian = gpu_laplacian_eigenmaps(X_all, n_components, k, config.DEVICE)
+                    print(f"   [MANIFOLD] GPU Laplacian Eigenmaps: {n_components} components")
+                except Exception as e:
+                    print(f"   [MANIFOLD] GPU Eigenmaps failed: {e}, falling back to CPU")
+            
+            # Fallback to sklearn
+            if laplacian is None:
+                try:
+                    se = SpectralEmbedding(n_components=n_components, n_neighbors=k, n_jobs=-1, random_state=42)
+                    laplacian = se.fit_transform(X_all)
+                    print(f"   [MANIFOLD] CPU Laplacian Eigenmaps: {n_components} components")
+                except Exception as e:
+                    print(f"   [MANIFOLD] Laplacian failed: {e}")
+                    laplacian = np.zeros((len(X_all), 8))
         else:
             laplacian = np.zeros((len(X_all), 0))  # Empty if disabled
 
@@ -360,8 +490,21 @@ def build_streams(X_v, X_test_v):
     emb_tr, rec_tr = ref.transform(X_v)
     emb_te, rec_te = ref.transform(X_test_v)
 
+    # [OMEGA] K-Means Features for Trees
+    # Provides "Distance to Prototype" features
+    km = KMeansFeaturizer(n_clusters=32, seed=42).fit(X_v) # 32 clusters
+    km_tr = km.transform(X_v)
+    km_te = km.transform(X_test_v)
+
     X_neural_tr = np.hstack([X_v, feats_tr, emb_tr])
     X_neural_te = np.hstack([X_test_v, feats_te, emb_te])
-    X_tree_tr = np.hstack([X_v, feats_tr, rec_tr])
-    X_tree_te = np.hstack([X_test_v, feats_te, rec_te])
+    
+    
+    # Trees get: View + Manifold + DAE_Embedding (Effective) + KMeans
+    # Replaced 'rec' with 'emb' because Trees don't need denoised input (redundant), they need the latent structure.
+    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr])
+    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te])
+    
+    return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te
+    
     return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te

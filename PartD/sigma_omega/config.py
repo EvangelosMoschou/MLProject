@@ -37,16 +37,17 @@ else:
         n = int(_n_seeds)
         SEEDS = [base + i for i in range(n)]
     else:
-        SEEDS = [42, 43, 44, 45, 46]
+        SEEDS = [1337]  # Single seed for fast run
 
 BATCH_SIZE = 512  # Adjusted for RTX 3060 per requirements
 LR_SCALE = 2e-3
+WSAM_GAMMA = _env_float('WSAM_GAMMA', 0.9)
 SAM_RHO = 0.08
 TABM_K = _env_int('TABM_K', 4)  # BatchEnsemble members
 DIFFUSION_EPOCHS = _env_int('DIFFUSION_EPOCHS', 30)
 TTT_STEPS = _env_int('TTT_STEPS', 10)
 
-ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', True)  # Enable transductive learning (DAE, Laplacian use test data)
+ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', False)  # DISABLED to prevent overfitting (DAE, Laplacian were using test data)
 USE_STACKING = _env_bool('USE_STACKING', True)  # Enable stacking meta-learner
 VIEWS = [v.strip().lower() for v in os.getenv('VIEWS', 'raw,quantile,pca,ica').split(',') if v.strip()]
 
@@ -55,6 +56,7 @@ VIEWS = [v.strip().lower() for v in os.getenv('VIEWS', 'raw,quantile,pca,ica').s
 META_LEARNER = os.getenv('META_LEARNER', 'lr').strip().lower()  # lr | lgbm | ridge | nnls
 USE_TABPFN = _env_bool('USE_TABPFN', True)  # Enabled: adds diversity to ensemble
 TABPFN_N_ENSEMBLES = _env_int('TABPFN_N_ENSEMBLES', 64)  # v2.5 supports higher ensembles
+TABPFN_MAX_TIME = _env_int('TABPFN_MAX_TIME', 60) # Fast Production: 60s per fit (OOF used 300s)
 LGBM_MAX_DEPTH = _env_int('LGBM_MAX_DEPTH', 3)
 LGBM_NUM_LEAVES = _env_int('LGBM_NUM_LEAVES', 31)
 LGBM_N_ESTIMATORS = _env_int('LGBM_N_ESTIMATORS', 400)
@@ -64,6 +66,7 @@ ENABLE_ADV_REWEIGHT = _env_bool('ENABLE_ADV_REWEIGHT', False)
 ADV_MODEL = os.getenv('ADV_MODEL', 'lr').strip().lower()  # lr | xgb
 ADV_CLIP = _env_float('ADV_CLIP', 10.0)
 ADV_POWER = _env_float('ADV_POWER', 1.0)
+RUN_ADV_DIAGNOSTIC = _env_bool('RUN_ADV_DIAGNOSTIC', True)  # Print adversarial validation AUC at startup
 
 # SWA (stochastic weight averaging) for ThetaTabM (opt-in)
 ENABLE_SWA = _env_bool('ENABLE_SWA', False)
@@ -74,11 +77,11 @@ ENABLE_CORAL = _env_bool('ENABLE_CORAL', False)
 CORAL_REG = _env_float('CORAL_REG', 1e-3)
 
 # Iterative self-training with stability constraints (opt-in; transductive)
-ENABLE_SELF_TRAIN = _env_bool('ENABLE_SELF_TRAIN', False)
-SELF_TRAIN_ITERS = _env_int('SELF_TRAIN_ITERS', 0)
-SELF_TRAIN_CONF = _env_float('SELF_TRAIN_CONF', 0.92)  # Lowered from 0.96 (no hidden test set)
+ENABLE_SELF_TRAIN = _env_bool('ENABLE_SELF_TRAIN', False)  # Disabled for quick run
+SELF_TRAIN_ITERS = _env_int('SELF_TRAIN_ITERS', 1)
+SELF_TRAIN_CONF = _env_float('SELF_TRAIN_CONF', 0.96)  # 96% confidence for pseudo-labels
 SELF_TRAIN_AGREE = _env_float('SELF_TRAIN_AGREE', 1.0)
-SELF_TRAIN_VIEW_AGREE = _env_float('SELF_TRAIN_VIEW_AGREE', 0.66)
+SELF_TRAIN_VIEW_AGREE = _env_float('SELF_TRAIN_VIEW_AGREE', 0.50)  # Lowered from 0.66
 SELF_TRAIN_MAX = _env_int('SELF_TRAIN_MAX', 10000)
 SELF_TRAIN_WEIGHT_POWER = _env_float('SELF_TRAIN_WEIGHT_POWER', 1.0)
 
@@ -95,9 +98,11 @@ DAE_EPOCHS = _env_int('DAE_EPOCHS', 30)
 DAE_NOISE_STD = _env_float('DAE_NOISE_STD', 0.1)
 MANIFOLD_K = _env_int('MANIFOLD_K', 20)
 ENABLE_PAGERANK = _env_bool('ENABLE_PAGERANK', True)
-ENABLE_LAPLACIAN = _env_bool('ENABLE_LAPLACIAN', True)  # Laplacian Eigenmaps in manifold
+ENABLE_LAPLACIAN = _env_bool('ENABLE_LAPLACIAN', False)  # Disabled for speed & memory
+USE_GPU_EIGENMAPS = _env_bool('USE_GPU_EIGENMAPS', True)  # GPU acceleration for Laplacian
 ENABLE_DIFFUSION = _env_bool('ENABLE_DIFFUSION', True)  # Diffusion augmentation per-fold
 DIFFUSION_N_SAMPLES = _env_int('DIFFUSION_N_SAMPLES', 1000)  # Synthetic samples per fold
+ENABLE_RAZOR = _env_bool('ENABLE_RAZOR', True)  # Enable Razor feature selection
 
 # LID temperature scaling (opt-in)
 ENABLE_LID_SCALING = _env_bool('ENABLE_LID_SCALING', False)

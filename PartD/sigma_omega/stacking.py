@@ -36,6 +36,8 @@ def fit_predict_stacking(
     pseudo_y=None,
     pseudo_w=None,
     return_oof=False,
+    X_train_raw=None,  # Raw data for TabPFN (bypasses all feature transforms)
+    X_test_raw=None,   # Raw data for TabPFN
 ):
     """
     Cross-Fit Stacking with Meta-Learner Optimization Support.
@@ -104,10 +106,31 @@ def fit_predict_stacking(
             
             # Select Feature Stream
             is_tree = ('XGB' in name or 'Cat' in name or 'LGBM' in name)
-            X_f_tr = X_tree_tr if is_tree else X_neural_tr
-            X_f_val = X_tree_val if is_tree else X_neural_val
-            X_f_te = X_tree_te_fold if is_tree else X_neural_te_fold
-            pX_f = pX_tree if is_tree else pX_neural
+            is_tabpfn = 'TabPFN' in name
+            is_svm = getattr(base_template, '_is_svm', False) or 'SVM' in name
+            
+            # TabPFN: Use RAW data only? 
+            # [CRITICAL FIX] When Diffusion is ON, X_train_raw is NOT augmented, but y_tr IS augmented.
+            # We MUST use the augmented stream (X_f_tr) to match dimensions.
+            # The "Raw" bypass is only valid if no augmentation happens.
+            # if is_tabpfn and X_train_raw is not None:
+            #     X_f_tr = X_train_raw[tr_idx]
+            #     X_f_val = X_train_raw[val_idx]
+            #     X_f_te = X_test_raw
+            #     pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
+            # else:
+            
+            # SVM: Use view-only features (no manifold streams - SVM struggles with high-dim)
+            if is_svm:
+                X_f_tr = X_tr_fold  # View features only (post-augmentation)
+                X_f_val = X_val_fold
+                X_f_te = X_test_view_fold
+                pX_f = X_test_view_fold[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
+            else:
+                X_f_tr = X_tree_tr if is_tree else X_neural_tr
+                X_f_val = X_tree_val if is_tree else X_neural_val
+                X_f_te = X_tree_te_fold if is_tree else X_neural_te_fold
+                pX_f = pX_tree if is_tree else pX_neural
             
             # Concatenate Pseudo if active
             X_train_final = X_f_tr
@@ -117,17 +140,18 @@ def fit_predict_stacking(
             if pX_f is not None:
                 # Handle Concatenation & Label Types
                 is_pseudo_soft = (py.ndim > 1) or np.issubdtype(py.dtype, np.floating)
-                is_torch = hasattr(model, 'finetune_on_pseudo') or 'TabPFN' in name # TabPFN Wrapper handles hard internally
+                is_tabpfn = 'TabPFN' in name  # TabPFN requires HARD labels only
+                is_torch = hasattr(model, 'finetune_on_pseudo') and not is_tabpfn
                 
                 y_tr_eff = y_train_final
                 py_eff = py
                 
-                # Trees: Hard Labels
-                if is_pseudo_soft and not is_torch:
+                # TabPFN & Trees: Hard Labels (TabPFN doesn't support soft labels)
+                if is_pseudo_soft and (not is_torch or is_tabpfn):
                     if py.ndim > 1: py_eff = np.argmax(py, axis=1).astype(np.int64)
                     else: py_eff = py.astype(np.int64)
                 elif is_pseudo_soft and is_torch:
-                    # Torch: Soft Labels (if supported)
+                    # Torch models (TrueTabR): Soft Labels
                     if y_tr_eff.ndim == 1:
                         y_tr_eff = np.eye(num_classes, dtype=np.float32)[y_tr_eff]
                 
@@ -159,21 +183,92 @@ def fit_predict_stacking(
             
             p_test = model.predict_proba(X_f_te).astype(np.float32)
             test_preds_running[idx_m] += p_test
+            
+            # [MEMORY FIX] Aggressively free GPU memory after each model
+            del model
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # --- MEMORY CLEANUP PER FOLD ---
         # Crucial for preventing OOM when using Diffusion + Manifold features
-        del X_train_aug, X_val_fold, X_train_final, y_train_final
+        try:
+            del X_train_aug
+        except NameError:
+            pass
+        
+        # Explicitly delete fold tensors/arrays
+        del X_train_final, y_train_final, w_train_final
+        if 'X_tr_fold' in locals(): del X_tr_fold
+        if 'X_val_fold' in locals(): del X_val_fold
+        
+        # Stream deletion
         try:
              del X_tree_tr, X_tree_val, X_neural_tr, X_neural_val
              del X_f_tr, X_f_val, X_f_te
         except:
              pass
+             
+        # Clear model specific vars
+        try:
+            del model, p_oof, p_test
+        except:
+            pass
+
         import gc
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Average Test Predictions
     for i in range(n_models):
         test_preds_running[i] /= cv_splits
+
+    # >>> OVERFITTING DIAGNOSTIC REPORT <<<
+    print("\n  ╔══════════════════════════════════════════════════════════════╗")
+    print("  ║              OVERFITTING DIAGNOSTIC REPORT                   ║")
+    print("  ╠══════════════════════════════════════════════════════════════╣")
+    
+    model_names = [name for name, _ in names_models]
+    oof_accuracies = []
+    
+    for idx_m, name in enumerate(model_names):
+        oof_pred_labels = np.argmax(oof_preds[idx_m], axis=1)
+        oof_acc = (oof_pred_labels == y).mean() * 100
+        oof_accuracies.append(oof_acc)
+        
+        # Overfitting indicator: if OOF acc is suspiciously high (>98%) or has high variance
+        flag = ""
+        if oof_acc > 98:
+            flag = " ⚠️ SUSPICIOUS (too high)"
+        elif oof_acc < 70:
+            flag = " ⚠️ UNDERFITTING"
+        
+        print(f"  ║  {name:<20} OOF Accuracy: {oof_acc:6.2f}%{flag:<20}║")
+    
+    # Ensemble OOF (average of all models)
+    ensemble_oof = np.mean([oof_preds[i] for i in range(len(oof_preds))], axis=0)
+    ensemble_oof_labels = np.argmax(ensemble_oof, axis=1)
+    ensemble_oof_acc = (ensemble_oof_labels == y).mean() * 100
+    
+    print("  ╠══════════════════════════════════════════════════════════════╣")
+    print(f"  ║  {'ENSEMBLE OOF':<20} Accuracy: {ensemble_oof_acc:6.2f}%                   ║")
+    print("  ╠══════════════════════════════════════════════════════════════╣")
+    
+    # Compare best single model vs ensemble
+    best_single = max(oof_accuracies)
+    ensemble_gain = ensemble_oof_acc - best_single
+    if ensemble_gain > 0:
+        print(f"  ║  Ensemble Gain: +{ensemble_gain:.2f}% over best single model          ║")
+    else:
+        print(f"  ║  ⚠️ Ensemble WORSE than best single by {-ensemble_gain:.2f}%            ║")
+    
+    # Overfitting warning
+    if ensemble_oof_acc > 95:
+        print("  ║  ⚠️ WARNING: OOF acc >95% may indicate data leakage!         ║")
+    
+    print("  ╚══════════════════════════════════════════════════════════════╝\n")
 
     # --- META LEARNER ---
     meta_X = np.hstack(oof_preds)

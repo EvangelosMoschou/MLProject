@@ -410,7 +410,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
     \item \textbf{Feature Engineering:} LID, PageRank, Transductive DAE
     \item \textbf{Ensemble Models:} XGBoost DART, CatBoost Langevin, TabR, TabPFN
     \item \textbf{Calibration:} Isotonic regression, LID temperature scaling
-    \item \textbf{Final Predictions:} NNLS Stacking (5 seeds)
+    \item \textbf{Final Predictions:} NNLS Stacking (1 seed)
 \end{enumerate}
 \end{block}
 \end{frame}
@@ -428,7 +428,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \vspace{0.2cm}
 \textbf{2. Feature Selection (Razor):}
 \begin{itemize}
-    \item Per-model masks (Cat: 179, XGB: 180)
+    \item Per-model masks (\textasciitilde{}202 features)
     \item Μείωση θορύβου
 \end{itemize}
 
@@ -436,6 +436,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \textbf{3. Manifold Engineering:}
 \begin{itemize}
     \item LID, PageRank στον KNN γράφο
+    \item \textbf{Laplacian Eigenmaps (GPU):} Χαμηλοδιάστατη γεωμετρική αναπαράσταση (torch.lobpcg)
 \end{itemize}
 
 \vspace{0.2cm}
@@ -493,9 +494,11 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \textbf{In-Context Learning για Tabular Data}
 \begin{itemize}
     \item Pre-trained transformer σε synthetic datasets (v2.5)
+    \item \textbf{Post-Hoc Ensembling (PHE):} Αυτόματη σύνθεση ensemble από 100 base models
     \item Zero-shot inference (χωρίς training στα δικά μας δεδομένα)
-    \item Περιορισμός: max 10000 samples, 500 features (v2.5)
+    \item Περιορισμός: max 50000 samples, 500 features (v2.5)
     \item Παρέχει ανεξάρτητη οπτική (ορθογωνικό μοντέλο)
+    \item Χρησιμοποιεί enhanced features (παρά τις προτιμήσεις δημιουργών για raw)
 \end{itemize}
 \end{block}
 
@@ -509,17 +512,16 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \column{0.5\textwidth}
 \textbf{Monte Carlo Ensemble:}
 \begin{itemize}
-    \item 5 τυχαία seeds
-    \item Μείωση διακύμανσης: $\text{Var}/\sqrt{5}$
-    \item Robust predictions
+    \item Τεχνική: 5 τυχαία seeds για variance reduction
+    \item (Δεν χρησιμοποιήθηκε στο τελικό μοντέλο)
 \end{itemize}
 
 \vspace{0.5cm}
-\textbf{10-Fold Cross-Validation:}
+\textbf{5-Fold Cross-Validation:}
 \begin{itemize}
     \item Stratified splits
-    \item 90\% train, 10\% validation
-    \item Τελικό: Μέσος όρος 10 models
+    \item 80\% train, 20\% validation
+    \item Τελικό: Μέσος όρος 5 models
 \end{itemize}
 
 \column{0.5\textwidth}
@@ -615,7 +617,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \begin{enumerate}
     \item Εκπαίδευση CatBoost \& XGBoost scout models (5-fold CV)
     \item Υπολογισμός CV-averaged feature importance ανά μοντέλο
-    \item Δημιουργία ξεχωριστών masks: CatBoost → 179, XGBoost → 180 features
+    \item Δημιουργία ξεχωριστών masks: Αφαίρεση bottom 10\% → \textasciitilde{}202 features κάθε μοντέλο
 \end{enumerate}
 \end{block}
 
@@ -623,7 +625,7 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
 \begin{exampleblock}{Εξαιρέσεις}
 \begin{itemize}
     \item \textbf{TabR:} Χρησιμοποιεί Quantile view (όχι Razor mask)
-    \item \textbf{TabPFN:} Χρησιμοποιεί raw data (bypasses Razor)
+    \item \textbf{TabPFN:} Χρησιμοποιεί enhanced features (παρά τη σύσταση δημιουργών για raw data)
 \end{itemize}
 \end{exampleblock}
 \end{frame}
@@ -634,8 +636,8 @@ d(\mathbf{x}_i, \mathbf{x}_j) = \sqrt{\sum_{d=1}^{D}(x_{i,d} - x_{j,d})^2}
     \item \textbf{Batch Size:} 512 (βέλτιστο για σταθερότητα σε RTX 3060)
     \item \textbf{Learning Rate:} 2e-3 με linear scaling
     \item \textbf{SAM $\rho$:} 0.08 για balance exploration/exploitation
-    \item \textbf{Seeds:} 5 για Monte Carlo averaging
-    \item \textbf{CV Folds:} 10 για robust validation
+    \item \textbf{Seeds:} 1337 (single seed στο τελικό)
+    \item \textbf{CV Folds:} 5 για robust validation
 \end{itemize}
 \end{block}
 
@@ -671,8 +673,8 @@ P_{\text{ens}}(y|x) = \text{softmax}\left(\frac{1}{T(x)} \sum_{m=1}^{M} w_m \cdo
 \begin{enumerate}
     \item \textbf{Υπολογιστικό Κόστος:}
     \begin{itemize}
-        \item 5 seeds × 10 folds = 50 model trainings
-        \item Συνολικός χρόνος: 2-3 ώρες (RTX 3060)
+        \item 1 seed × 5 folds = 5 model trainings ανά view/μοντέλο
+        \item Συνολικός χρόνος: 1-2 ώρες (RTX 3060)
     \end{itemize}
     
     \item \textbf{Μνήμη:}
@@ -749,7 +751,7 @@ AutoGluon & Generic AutoML, δεν υποστηρίζει TTT/Pseudo-labeling \\
     \item Υβριδική αρχιτεκτονική (Trees + Neural Networks)
     \item Advanced feature engineering \& manifold analysis
     \item State-of-the-art optimization techniques
-    \item Πολλαπλές τεχνικές γενίκευσης (Monte Carlo, βαθμονόμηση)
+    \item Πολλαπλές τεχνικές γενίκευσης (5-fold CV, βαθμονόμηση)
 \end{itemize}
 \end{block}
 
@@ -758,7 +760,7 @@ AutoGluon & Generic AutoML, δεν υποστηρίζει TTT/Pseudo-labeling \\
 \begin{itemize}
     \item Stochastic optimization (DART, Langevin, SAM)
     \item Topology awareness (MixUp, LID, PageRank)
-    \item Variance reduction (Monte Carlo, Calibration)
+    \item Variance reduction (5-fold CV, Calibration)
 \end{itemize}
 \end{alertblock}
 \end{frame}

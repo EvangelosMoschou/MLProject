@@ -6,8 +6,9 @@ from .calibration import CalibratedModel
 from .domain import adversarial_weights
 from .features import apply_feature_view, build_streams
 from .losses import apply_lid_temperature_scaling
-from .models_torch import KAN, ThetaTabM, TrueTabR, is_torch_model, select_silver_samples
+from .models_torch import TrueTabR, is_torch_model, select_silver_samples
 from .models_trees import get_cat_langevin, get_xgb_dart
+from .models_svm import get_svm
 from .pseudo import normalize_pseudo
 from .stacking import fit_predict_stacking
 
@@ -74,7 +75,7 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         ('XGB_DART', get_xgb_dart(num_classes, iterations=config.GBDT_ITERATIONS)),
         ('Cat_Langevin', get_cat_langevin(num_classes, iterations=config.GBDT_ITERATIONS * 2)),
         ('TrueTabR', TrueTabR(num_classes)),
-        # ('KAN', KAN(None, num_classes)), 
+        ('SVM', get_svm()),
     ]
     
     # Store per-model razor masks if provided
@@ -112,10 +113,10 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
     active_models = []
     view_norm = view.strip().lower()
     
-    # 1. Quantile View -> TrueTabR Only (TabPFN excluded - prefers raw)
+    # 1. Quantile View -> TrueTabR + SVM (scaled data suits both)
     if view_norm == 'quantile':
         for name, model in names_models:
-            if name in ['TrueTabR']:  # TabPFN removed from quantile
+            if name in ['TrueTabR', 'SVM']:
                 active_models.append((name, model))
                 
     # 2. Raw View -> Trees + TabPFN (TabPFN prefers raw data)
@@ -124,10 +125,10 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
             if name in ['XGB_DART', 'Cat_Langevin', 'TabPFN']:
                 active_models.append((name, model))
     
-    # 3. PCA / ICA / RP Views -> Trees Only
+    # 3. PCA / ICA / RP Views -> SVM Only (Trees can't exploit rotations)
     elif view_norm in ['pca', 'ica', 'rp']:
         for name, model in names_models:
-            if name in ['XGB_DART', 'Cat_Langevin']:
+            if name in ['SVM']:
                  active_models.append((name, model))
                  
     # 4. Fallback (Unknown view or simple run) -> All Models
@@ -157,6 +158,8 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
             pseudo_idx=pseudo_idx,
             pseudo_y=pseudo_y,
             pseudo_w=pseudo_w,
+            X_train_raw=X_train_raw,   # Raw data for TabPFN
+            X_test_raw=X_test_raw,     # Raw data for TabPFN
         )
         # Σημείωση: LID scaling για stacking output;
         # Αν δεν υπολογίσαμε LID globally, δεν μπορούμε να scale εύκολα.
