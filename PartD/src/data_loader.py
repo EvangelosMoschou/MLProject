@@ -41,8 +41,16 @@ def load_data(train_path=None, test_path=None):
         print(f"Loading data from: {train_path} and {test_path}")
         train_df = pd.read_csv(train_path, header=None)
         
-        X = train_df.iloc[:, :-1].values
-        y = train_df.iloc[:, -1].values
+        # [REFACTOR] Explicit targeting
+        # Blindly slicing -1 is dangerous if CSV structure changes.
+        # Prefer config.TARGET_COL if available, else -1.
+        target_idx = -1
+        
+        X = train_df.iloc[:, :target_idx].values
+        y = train_df.iloc[:, target_idx].values
+        
+        assert y is not None, "Target y is None!"
+        assert len(X) == len(y), "X and y length mismatch!"
         
         if test_path and os.path.exists(test_path):
             test_df = pd.read_csv(test_path, header=None)

@@ -208,77 +208,64 @@ class GoldenFeatureGenerator:
         self.ops = [] # List of (idx1, idx2, op_name)
     
     def fit(self, X, y):
-        # Simple correlation screening
         n_features = X.shape[1]
-        candidates = []
+        classes = np.unique(y)
+        is_multiclass = len(classes) > 2
         
-        # Subsample for speed if X is huge?
-        # Let's use full X for robust stats.
-        
-        # We need to handle potential NaNs/Infs during creation
-        # Y must be numeric (it is).
-        
-        # Correlation with Y (Pearson).
-        # Handle multi-class Y: Use f_classif logic? Or just correlate with label?
-        # Correlating with label index is weak for non-ordinal.
-        # Better: Train a quick decision tree on feature and get importance? Too slow.
-        # Let's stick to Pearson with y (works well for binary/ordinal).
-        # For general multi-class, maybe max correlation with any one-hot column?
-        
-        # Optimization: Randomly select pairs if n_features is huge?
-        # If n=100, pairs=5000. manageable.
-        
-        # Let's limit to top 40 raw features to form pairs from, to avoid explosion.
-        # No, let's try all pairs but vectorized.
-        
-        # Actually, let's keep it simple: Raw correlations.
-        
-        print(f"   [GOLDEN] Mining interactions from {n_features} features...")
-        
-        # Precompute norms?
-        
-        # Vectorized search is hard without high memory.
-        # Loop over pairs.
-        
-        # Limit input features to top 50 by mutual information?
-        # Let's just pick top 20 correlations.
+        # Helper for One-vs-Rest Max Correlation
+        def get_score(f_vec, y_vec):
+            # Check constant
+            if np.std(f_vec) < 1e-9: 
+                return 0.0
+            
+            if not is_multiclass:
+                # Binary: Simple correlation
+                return abs(np.corrcoef(f_vec, y_vec)[0, 1])
+            else:
+                # Multiclass: Max correlation with any class binary vector
+                # This logic captures "Feature F is strong for Class C"
+                scores_c = []
+                for c in classes:
+                    y_c = (y_vec == c).astype(float)
+                    # Check constant target (unlikely unless 1 class)
+                    if np.std(y_c) < 1e-9: continue 
+                    corr = abs(np.corrcoef(f_vec, y_c)[0, 1])
+                    scores_c.append(corr)
+                return max(scores_c) if scores_c else 0.0
+
+        print(f"   [GOLDEN] Mining interactions from {n_features} features (OVR-Corr)...")
         
         scores = []
-        
-        # Heuristic: Combine the features that are ALREADY strong?
-        # Or combine weak ones?
-        # Let's iterate over ALL pairs of the first 50 features roughly.
         limit = min(n_features, 50)
+        
+        # Precompute individual feature OVR to prioritize?
+        # Let's iterate pairs.
         
         for i in range(limit):
             for j in range(i+1, limit):
                 f1, f2 = X[:, i], X[:, j]
                 
-                # Operations
                 # Sum
                 f_sum = f1 + f2
-                c_sum = abs(np.corrcoef(f_sum, y)[0, 1]) if np.std(f_sum) > 1e-9 else 0
-                scores.append((c_sum, i, j, 'sum'))
+                scores.append((get_score(f_sum, y), i, j, 'sum'))
                 
                 # Diff
                 f_diff = f1 - f2
-                c_diff = abs(np.corrcoef(f_diff, y)[0, 1]) if np.std(f_diff) > 1e-9 else 0
-                scores.append((c_diff, i, j, 'diff'))
+                scores.append((get_score(f_diff, y), i, j, 'diff'))
                 
                 # Mul
                 f_mul = f1 * f2
-                c_mul = abs(np.corrcoef(f_mul, y)[0, 1]) if np.std(f_mul) > 1e-9 else 0
-                scores.append((c_mul, i, j, 'mul'))
+                scores.append((get_score(f_mul, y), i, j, 'mul'))
                 
-                # Div (protected)
+                # Div
+                # Protect div by zero
                 f_div = f1 / (f2 + 1e-6)
-                c_div = abs(np.corrcoef(f_div, y)[0, 1]) if np.std(f_div) > 1e-9 else 0
-                scores.append((c_div, i, j, 'div'))
+                scores.append((get_score(f_div, y), i, j, 'div'))
 
-        # Sort and keep top N
         scores.sort(key=lambda x: x[0], reverse=True)
         self.ops = scores[:self.top_n]
-        print(f"   [GOLDEN] Found {len(self.ops)} golden interactions. Top score: {self.ops[0][0]:.4f}")
+        if self.ops:
+            print(f"   [GOLDEN] Found {len(self.ops)} golden interactions. Top OVR score: {self.ops[0][0]:.4f}")
         return self
 
     def transform(self, X):
