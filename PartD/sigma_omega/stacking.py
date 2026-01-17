@@ -8,7 +8,7 @@ from scipy.optimize import nnls
 
 from . import config
 from .losses import prob_meta_features
-from .features import apply_feature_view, build_streams
+from .features import apply_feature_view, build_streams, GeometricFeatureGenerator
 from .generative import synthesize_data
 
 def tabpfn_predict_proba(X_train, y_train, X_eval, n_ensembles=32, seed=42):
@@ -107,6 +107,13 @@ def fit_predict_stacking(
     test_preds_running = [np.zeros((len(X_test_base), num_classes), dtype=np.float32) for _ in range(n_models)]
 
     print(f"  [STACKING] Cross-Validation ({cv_splits} folds) | View: {view_name} | Models: {len(names_models)}")
+    
+    if config.TUNE_HYPERPARAMS:
+        print("   >>> [OPTUNA] Hyperparameter Tuning Mode Enabled (Stub) <<<")
+        # Optimization logic would go here:
+        # study = optuna.create_study(direction='maximize')
+        # study.optimize(lambda trial: objective(trial, X_train_base, y), n_trials=50)
+        # For now, proceeding with fixed params + Geometry.
     
     # Transform View (Split handled inside loop usually for strict correctness, but optimization allows global transform if transductive)
     # [FIX] Moved inside loop to prevent leakage unless transductive logic is explicitly allowed.
@@ -260,6 +267,21 @@ def fit_predict_stacking(
                 X_f_val = X_val_raw_fold
                 X_f_te = X_test_raw # Full Test Raw
                 pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
+                
+                # [OMEGA] TabPFN Geometry Injection
+                # Explicitly compute Centroid Distances on RAW Data
+                geo = GeometricFeatureGenerator().fit(X_tr_raw_aug, y_tr_raw_aug)
+                g_tr = geo.transform(X_tr_raw_aug)
+                g_val = geo.transform(X_val_raw_fold)
+                g_te = geo.transform(X_test_raw)
+                if pX_f is not None: gp = geo.transform(pX_f)
+                
+                pass # Just ensuring indentation
+                
+                X_f_tr = np.hstack([X_f_tr, g_tr])
+                X_f_val = np.hstack([X_f_val, g_val])
+                X_f_te = np.hstack([X_f_te, g_te])
+                if pX_f is not None: pX_f = np.hstack([pX_f, gp])
                 
             else:
                 # Standard Tree/Neural Streams (Built from X_tr_aug)

@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from . import config
 from .domain import coral_align
 from scipy.special import erfinv
+from scipy.spatial.distance import cdist
 from sklearn.linear_model import LogisticRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.cross_decomposition import PLSRegression
@@ -281,6 +282,40 @@ class GoldenFeatureGenerator:
             out.append(res)
         
         return np.column_stack(out).astype(np.float32)
+
+
+class GeometricFeatureGenerator:
+    """
+    Calculates distances (Cosine, Euclidean) to Class Centroids.
+    Explicitizes geometry for Tree models.
+    """
+    def __init__(self):
+        self.centroids = {} # class_label -> mean_vector
+        self.classes = []
+
+    def fit(self, X, y):
+        # Compute centroids on Train Only
+        self.classes = np.unique(y)
+        for c in self.classes:
+            self.centroids[c] = np.mean(X[y == c], axis=0)
+        return self
+
+    def transform(self, X):
+        if not self.centroids: return np.zeros((len(X), 0))
+        
+        feats = []
+        # Centroids matrix
+        centers = np.vstack([self.centroids[c] for c in self.classes])
+        
+        # 1. Cosine Distance
+        d_cos = cdist(X, centers, metric='cosine')
+        feats.append(d_cos)
+        
+        # 2. Euclidean Distance
+        d_euc = cdist(X, centers, metric='euclidean')
+        feats.append(d_euc)
+        
+        return np.hstack(feats).astype(np.float32)
 
 
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
@@ -605,6 +640,7 @@ def build_streams(X_v, X_test_v, y_train=None):
     # [OMEGA] Supervised Features (PLS + Golden)
     pls_tr, pls_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
     gold_tr, gold_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
+    geo_tr, geo_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
 
     if y_train is not None:
         # PLS for Neural
@@ -616,13 +652,18 @@ def build_streams(X_v, X_test_v, y_train=None):
         gold = GoldenFeatureGenerator(top_n=20).fit(X_v, y_train)
         gold_tr = gold.transform(X_v)
         gold_te = gold.transform(X_test_v)
+        
+        # [OMEGA] Geometric Features (Centroids)
+        geo = GeometricFeatureGenerator().fit(X_v, y_train)
+        geo_tr = geo.transform(X_v)
+        geo_te = geo.transform(X_test_v)
 
-    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr])
-    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te])
+    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr, geo_tr])
+    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te, geo_te])
     
-    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden
+    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden + Geometric
     # Replaced 'rec' with 'emb' (Embeddings are richer)
-    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr])
-    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te])
+    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr, geo_tr])
+    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te, geo_te])
     
     return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te

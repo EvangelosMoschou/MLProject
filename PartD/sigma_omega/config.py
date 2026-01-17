@@ -50,6 +50,7 @@ TTT_STEPS = _env_int('TTT_STEPS', 10)
 ALLOW_TRANSDUCTIVE = _env_bool('ALLOW_TRANSDUCTIVE', False)  # DISABLED to prevent overfitting (DAE, Laplacian were using test data)
 USE_STACKING = _env_bool('USE_STACKING', True)  # Enable stacking meta-learner
 VIEWS = [v.strip().lower() for v in os.getenv('VIEWS', 'raw,quantile,pca,ica').split(',') if v.strip()]
+TUNE_HYPERPARAMS = _env_bool('TUNE_HYPERPARAMS', False) # Enable Optuna optimization stub
 
 # Stacking enhancements (opt-in)
 # META_LEARNER tuned via Optuna (3030 trials): LR(C=0.55) = 87.20% > Ridge(86.96%) > NNLS(82.39%)
