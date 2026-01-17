@@ -455,47 +455,93 @@ class AdversarialDriftRemover:
         return X[:, self.keep_mask]
 
 
-class ConfusionDiscriminator:
+class ConfusionScout:
     """
-    TRAINS A 'SCOUT' MODEL TO SEPARATE CONFUSION PAIRS.
-    Example: If Class 2 and 5 are confused, train a binary model (2 vs 5)
-    and use its probability as a feature for ALL samples.
+    TRAINS 'SCOUT' MODELS TO SEPARATE CONFUSED CLASS PAIRS.
+    For each pair (A, B) in `pairs`, trains a binary classifier.
+    Returns probability of Class B for each sample.
     """
-    def __init__(self, class_a=2, class_b=5):
-        self.class_a = class_a
-        self.class_b = class_b
-        self.scout = None
+    def __init__(self, pairs=None):
+        self.pairs = pairs or [] # List of tuples (class_a, class_b)
+        self.scouts = [] # List of (pair, model)
         
     def fit(self, X, y):
-        # Filter for A vs B
-        mask = (y == self.class_a) | (y == self.class_b)
-        X_sub = X[mask]
-        y_sub = y[mask]
-        
-        # Determine targets (binary)
-        # 0 = A, 1 = B
-        y_bin = (y_sub == self.class_b).astype(int)
-        
-        # Check if we have enough samples
-        if len(y_bin) < 20 or len(np.unique(y_bin)) < 2:
-            print(f"   [SCOUT] Not enough samples for {self.class_a} vs {self.class_b}")
-            self.scout = None
+        if not self.pairs:
             return self
             
-        # Train Logistic Regression (Linear Discriminant)
-        # Using simple LR for robustness. Could use XGB/RF.
-        self.scout = LogisticRegression(C=1.0, solver='lbfgs', max_iter=200, random_state=42)
-        self.scout.fit(X_sub, y_bin)
+        self.scouts = []
+        for (a, b) in self.pairs:
+            # Filter for A vs B
+            mask = (y == a) | (y == b)
+            X_sub = X[mask]
+            y_sub = y[mask]
+            
+            # Binary Target: 0=A, 1=B
+            y_bin = (y_sub == b).astype(int)
+            
+            if len(y_bin) < 20 or len(np.unique(y_bin)) < 2:
+                continue
+                
+            model = LogisticRegression(C=1.0, solver='lbfgs', max_iter=200, random_state=42)
+            model.fit(X_sub, y_bin)
+            self.scouts.append(((a,b), model))
+            
         return self
         
     def transform(self, X):
-        if self.scout is None:
-            return np.zeros((len(X), 1))
+        if not self.scouts:
+            return np.zeros((len(X), 0))
             
-        # Predict Prob(Class B) for ALL samples
-        # This gives a "B-ness" score relative to A
-        prob_b = self.scout.predict_proba(X)[:, 1:]
-        return prob_b.astype(np.float32)
+        feats = []
+        for (a, b), model in self.scouts:
+            # Predict Prob(B)
+            p = model.predict_proba(X)[:, 1:]
+            feats.append(p)
+            
+        return np.hstack(feats).astype(np.float32)
+
+
+def find_confusion_pairs(X, y, top_k=3, seed=42):
+    """
+    Train a quick global proxy to identify top confusion pairs.
+    """
+    from sklearn.metrics import confusion_matrix
+    
+    # Lightweight proxy
+    model = LogisticRegression(C=1.0, max_iter=100, random_state=seed)
+    model.fit(X, y)
+    preds = model.predict(X)
+    
+    cm = confusion_matrix(y, preds)
+    np.fill_diagonal(cm, 0) # Ignore correct predictions
+    
+    # Find top pairs
+    pairs = []
+    # Get indices of top_k max values
+    # We want distinct pairs (A,B). Note CM is not symmetric (A->B != B->A).
+    # We care about misclassification in general.
+    # Symmetry: (A,B) and (B,A) are same "boundary".
+    # Let's sum symmetric elements? cm + cm.T
+    cm_sym = cm + cm.T
+    # Taking upper triangle to avoid duplicates
+    cm_sym = np.triu(cm_sym)
+    
+    flat_indices = np.argsort(cm_sym.ravel())[::-1]
+    
+    for idx in flat_indices:
+        if len(pairs) >= top_k: break
+        
+        row, col = np.unravel_index(idx, cm_sym.shape)
+        if cm_sym[row, col] == 0: break # No more errors
+        
+        # Determine actual class labels
+        # Assuming y classes are 0..N-1 matching indices. 
+        # Safer: use model.classes_
+        c1, c2 = model.classes_[row], model.classes_[col]
+        pairs.append((c1, c2))
+        
+    print(f"   [SCOUT] Identified Top Confusion Pairs: {pairs}")
+    return pairs
 
 
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
@@ -836,9 +882,12 @@ def build_streams(X_v, X_test_v, y_train=None):
         gold_tr = gold_gen.transform(X_v, y_train, mode='train')
         gold_te = gold_gen.transform(X_test_v, mode='test')
         
-        # [OMEGA] Confusion Scout (Class 2 vs 5 Discriminator)
-        # Wrapped in CrossFold to prevent leakage
-        scout_gen = CrossFoldFeatureGenerator(ConfusionDiscriminator, class_a=2, class_b=5, n_folds=5).fit(X_v, y_train)
+        # [OMEGA] Confusion Scout (Auto-Detected Pairs)
+        # 1. Detect pairs globally on View Train data
+        pairs = find_confusion_pairs(X_v, y_train, top_k=3)
+        
+        # 2. Train Scouts using Cross-Fold generation (Leakage Proof)
+        scout_gen = CrossFoldFeatureGenerator(ConfusionScout, pairs=pairs, n_folds=5).fit(X_v, y_train)
         conf_tr = scout_gen.transform(X_v, y_train, mode='train')
         conf_te = scout_gen.transform(X_test_v, mode='test')
 
