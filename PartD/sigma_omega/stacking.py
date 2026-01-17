@@ -426,12 +426,21 @@ def fit_predict_stacking(
                 if config.CONFUSION_WEIGHT_MULTIPLIER > 1.0:
                     # We can use the 'meta_pairs' we detected earlier or re-detect
                     # Re-detecting on current fold is safer
-                    fold_pairs = find_confusion_pairs(X_tr_raw, y_tr_raw, top_k=1, seed=seed)
+                    fold_pairs = find_confusion_pairs(X_tr_raw_fold, y_tr, top_k=1, seed=seed)
                     for (c_a, c_b) in fold_pairs:
+                        # y_tr_eff is the effective label (potentially augmented or pseudo).
+                        # Ideally we weight the actual Training target.
+                        # y_tr_eff should match w_tr_base length.
                         mask_conf = (y_tr_eff == c_a) | (y_tr_eff == c_b)
+                        
+                        # Safety check for lengths
                         if mask_conf.shape[0] == w_tr_base.shape[0]:
-                            w_tr_base[mask_conf] *= config.CONFUSION_WEIGHT_MULTIPLIER
-                            print(f"    [Weighting] Boosted weights for Class {c_a} & {c_b} (x{config.CONFUSION_WEIGHT_MULTIPLIER})")
+                             w_tr_base[mask_conf] *= config.CONFUSION_WEIGHT_MULTIPLIER
+                             # print(f"    [Weighting] Boosted weights for Class {c_a} & {c_b} (x{config.CONFUSION_WEIGHT_MULTIPLIER})") # Silence spam
+                        else:
+                             # Mismatch (e.g. y_tr_eff is augmented, w_tr_base is not?)
+                             # usually w_tr_base matches y_tr_eff.
+                             pass
 
                 w_p_base = pw if pw is not None else np.ones(len(py), dtype=np.float32)
                 w_train_final = np.concatenate([w_tr_base, w_p_base]) 

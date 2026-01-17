@@ -18,6 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.cluster import KMeans
 from itertools import combinations
+from sklearn.model_selection import StratifiedKFold
 
 
 def gpu_laplacian_eigenmaps(X, n_components=8, k=20, device=None):
