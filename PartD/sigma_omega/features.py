@@ -455,6 +455,49 @@ class AdversarialDriftRemover:
         return X[:, self.keep_mask]
 
 
+class ConfusionDiscriminator:
+    """
+    TRAINS A 'SCOUT' MODEL TO SEPARATE CONFUSION PAIRS.
+    Example: If Class 2 and 5 are confused, train a binary model (2 vs 5)
+    and use its probability as a feature for ALL samples.
+    """
+    def __init__(self, class_a=2, class_b=5):
+        self.class_a = class_a
+        self.class_b = class_b
+        self.scout = None
+        
+    def fit(self, X, y):
+        # Filter for A vs B
+        mask = (y == self.class_a) | (y == self.class_b)
+        X_sub = X[mask]
+        y_sub = y[mask]
+        
+        # Determine targets (binary)
+        # 0 = A, 1 = B
+        y_bin = (y_sub == self.class_b).astype(int)
+        
+        # Check if we have enough samples
+        if len(y_bin) < 20 or len(np.unique(y_bin)) < 2:
+            print(f"   [SCOUT] Not enough samples for {self.class_a} vs {self.class_b}")
+            self.scout = None
+            return self
+            
+        # Train Logistic Regression (Linear Discriminant)
+        # Using simple LR for robustness. Could use XGB/RF.
+        self.scout = LogisticRegression(C=1.0, solver='lbfgs', max_iter=200, random_state=42)
+        self.scout.fit(X_sub, y_bin)
+        return self
+        
+    def transform(self, X):
+        if self.scout is None:
+            return np.zeros((len(X), 1))
+            
+        # Predict Prob(Class B) for ALL samples
+        # This gives a "B-ness" score relative to A
+        prob_b = self.scout.predict_proba(X)[:, 1:]
+        return prob_b.astype(np.float32)
+
+
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
     view = (view or 'raw').strip().lower()
     if view == 'raw':
@@ -779,18 +822,26 @@ def build_streams(X_v, X_test_v, y_train=None):
     gold_tr, gold_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
     geo_tr, geo_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
     anom_tr, anom_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
+    conf_tr, conf_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0)) # Confusion Features
 
     if y_train is not None:
-        # PLS for Neural
-        pls = PLSFeatureGen(n_components=10).fit(X_v, y_train)
-        pls_tr = pls.transform(X_v)
-        pls_te = pls.transform(X_test_v)
+        # [OMEGA] Cross-Fold Feature Generation (PLS + Golden) for LEAKAGE PREVENTION
+        # Neural Stream PLS
+        pls_gen = CrossFoldFeatureGenerator(PLSFeatureGen, n_components=10, n_folds=5).fit(X_v, y_train)
+        pls_tr = pls_gen.transform(X_v, y_train, mode='train')
+        pls_te = pls_gen.transform(X_test_v, mode='test')
+
+        # Tree Stream Golden
+        gold_gen = CrossFoldFeatureGenerator(GoldenFeatureGenerator, top_n=20, n_folds=5).fit(X_v, y_train)
+        gold_tr = gold_gen.transform(X_v, y_train, mode='train')
+        gold_te = gold_gen.transform(X_test_v, mode='test')
         
-        # Golden for Trees
-        gold = GoldenFeatureGenerator(top_n=20).fit(X_v, y_train)
-        gold_tr = gold.transform(X_v)
-        gold_te = gold.transform(X_test_v)
-        
+        # [OMEGA] Confusion Scout (Class 2 vs 5 Discriminator)
+        # Wrapped in CrossFold to prevent leakage
+        scout_gen = CrossFoldFeatureGenerator(ConfusionDiscriminator, class_a=2, class_b=5, n_folds=5).fit(X_v, y_train)
+        conf_tr = scout_gen.transform(X_v, y_train, mode='train')
+        conf_te = scout_gen.transform(X_test_v, mode='test')
+
         # [OMEGA] Geometric Features (Centroids)
         geo = GeometricFeatureGenerator().fit(X_v, y_train)
         geo_tr = geo.transform(X_v)
@@ -801,12 +852,12 @@ def build_streams(X_v, X_test_v, y_train=None):
         anom_tr = anom.transform(X_v)
         anom_te = anom.transform(X_test_v)
 
-    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr, geo_tr, anom_tr])
-    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te, geo_te, anom_te])
+    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr, geo_tr, anom_tr, conf_tr])
+    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te, geo_te, anom_te, conf_te])
     
-    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden + Geometric + Anomaly
+    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden + Geometric + Anomaly + ConfusionScout
     # Replaced 'rec' with 'emb' (Embeddings are richer)
-    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr, geo_tr, anom_tr])
-    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te, geo_te, anom_te])
+    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr, geo_tr, anom_tr, conf_tr])
+    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te, geo_te, anom_te, conf_te])
     
     return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te
