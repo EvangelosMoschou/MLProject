@@ -13,7 +13,10 @@ from . import config
 from .domain import coral_align
 from scipy.special import erfinv
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.cluster import KMeans
+from itertools import combinations
 
 
 def gpu_laplacian_eigenmaps(X, n_components=8, k=20, device=None):
@@ -156,6 +159,143 @@ class KMeansFeaturizer:
         return self.kmeans.transform(X).astype(np.float32)
 
 
+class PLSFeatureGen:
+    """
+    Supervised dimensionality reduction. Finds directions of maximum covariance with y.
+    Great for guiding Neural Networks towards the target signal.
+    """
+    def __init__(self, n_components=10):
+        self.n_components = n_components
+        self.pls = None
+
+    def fit(self, X, y):
+        # PLS requires y. If y is regression, ok. If classification, one-hot?
+        # Standard PLS works for regression. For classification, one-hot Y is typical.
+        # Here y is encoded integer. We can treat as regression (ordinal) or one-hot.
+        # Treating as regression is a strong heuristic for ordinal classes or binary.
+        # For multi-class, let's use one-hot internal logic if needed, but PLSRegression works with multi-output Y.
+        
+        # Check if y is multi-class
+        n_classes = len(np.unique(y))
+        if n_classes > 2:
+            # One-hot encode y for PLS2
+            y_ohe = np.zeros((len(y), n_classes))
+            y_ohe[np.arange(len(y)), y] = 1
+            y_target = y_ohe
+        else:
+            y_target = y
+            
+        self.pls = PLSRegression(n_components=self.n_components, scale=True)
+        try:
+            self.pls.fit(X, y_target)
+        except Exception as e:
+            print(f"   [PLS] Failed to fit: {e}")
+            self.pls = None
+        return self
+
+    def transform(self, X):
+        if self.pls is None: return np.zeros((len(X), 0))
+        return self.pls.transform(X)
+
+
+class GoldenFeatureGenerator:
+    """
+    Generates arithmetic interactions (sum, diff, mul, div) for feature pairs.
+    Keeps only top N features most correlated with target.
+    """
+    def __init__(self, top_n=20):
+        self.top_n = top_n
+        self.ops = [] # List of (idx1, idx2, op_name)
+    
+    def fit(self, X, y):
+        # Simple correlation screening
+        n_features = X.shape[1]
+        candidates = []
+        
+        # Subsample for speed if X is huge?
+        # Let's use full X for robust stats.
+        
+        # We need to handle potential NaNs/Infs during creation
+        # Y must be numeric (it is).
+        
+        # Correlation with Y (Pearson).
+        # Handle multi-class Y: Use f_classif logic? Or just correlate with label?
+        # Correlating with label index is weak for non-ordinal.
+        # Better: Train a quick decision tree on feature and get importance? Too slow.
+        # Let's stick to Pearson with y (works well for binary/ordinal).
+        # For general multi-class, maybe max correlation with any one-hot column?
+        
+        # Optimization: Randomly select pairs if n_features is huge?
+        # If n=100, pairs=5000. manageable.
+        
+        # Let's limit to top 40 raw features to form pairs from, to avoid explosion.
+        # No, let's try all pairs but vectorized.
+        
+        # Actually, let's keep it simple: Raw correlations.
+        
+        print(f"   [GOLDEN] Mining interactions from {n_features} features...")
+        
+        # Precompute norms?
+        
+        # Vectorized search is hard without high memory.
+        # Loop over pairs.
+        
+        # Limit input features to top 50 by mutual information?
+        # Let's just pick top 20 correlations.
+        
+        scores = []
+        
+        # Heuristic: Combine the features that are ALREADY strong?
+        # Or combine weak ones?
+        # Let's iterate over ALL pairs of the first 50 features roughly.
+        limit = min(n_features, 50)
+        
+        for i in range(limit):
+            for j in range(i+1, limit):
+                f1, f2 = X[:, i], X[:, j]
+                
+                # Operations
+                # Sum
+                f_sum = f1 + f2
+                c_sum = abs(np.corrcoef(f_sum, y)[0, 1]) if np.std(f_sum) > 1e-9 else 0
+                scores.append((c_sum, i, j, 'sum'))
+                
+                # Diff
+                f_diff = f1 - f2
+                c_diff = abs(np.corrcoef(f_diff, y)[0, 1]) if np.std(f_diff) > 1e-9 else 0
+                scores.append((c_diff, i, j, 'diff'))
+                
+                # Mul
+                f_mul = f1 * f2
+                c_mul = abs(np.corrcoef(f_mul, y)[0, 1]) if np.std(f_mul) > 1e-9 else 0
+                scores.append((c_mul, i, j, 'mul'))
+                
+                # Div (protected)
+                f_div = f1 / (f2 + 1e-6)
+                c_div = abs(np.corrcoef(f_div, y)[0, 1]) if np.std(f_div) > 1e-9 else 0
+                scores.append((c_div, i, j, 'div'))
+
+        # Sort and keep top N
+        scores.sort(key=lambda x: x[0], reverse=True)
+        self.ops = scores[:self.top_n]
+        print(f"   [GOLDEN] Found {len(self.ops)} golden interactions. Top score: {self.ops[0][0]:.4f}")
+        return self
+
+    def transform(self, X):
+        if not self.ops: return np.zeros((len(X), 0))
+        
+        out = []
+        for _, i, j, op in self.ops:
+            f1, f2 = X[:, i], X[:, j]
+            if op == 'sum': res = f1 + f2
+            elif op == 'diff': res = f1 - f2
+            elif op == 'mul': res = f1 * f2
+            elif op == 'div': res = f1 / (f2 + 1e-6)
+            out.append(res)
+        
+        return np.column_stack(out).astype(np.float32)
+
+
 def apply_feature_view(X_train, X_test, view, seed, allow_transductive=False):
     view = (view or 'raw').strip().lower()
     if view == 'raw':
@@ -229,24 +369,6 @@ class TransductiveDAE(nn.Module):
 
     def forward(self, x):
         return self.decoder(self.encoder(x))
-
-
-def swap_noise(x, p=0.15):
-    """
-    Applies Swap Noise (DAE gold standard).
-    Replaces values with random values from the same column within the batch.
-    """
-    n, d = x.shape
-    device = x.device
-    target_idx = torch.randperm(n, device=device)
-    # Mask: 1 means swap, 0 means keep
-    mask = (torch.rand(x.shape, device=device) < p).float()
-    
-    x_new = x.clone()
-    for c in range(d):
-        perm = torch.randperm(n, device=device)
-        x_new[:, c] = torch.where(mask[:, c] == 1, x[perm, c], x[:, c])
-    return x_new
 
 
 class TabularDiffusion(nn.Module):
@@ -341,10 +463,8 @@ class DataRefinery:
         self.dae.train()
         for _ in range(int(epochs)):
             for (xb,) in dl:
-                # [OMEGA] Swap Noise Upgrade
-                # Gaussian noise is bad for tabular (smears distributions). Swap noise preserves marginals.
-                xb_noisy = swap_noise(xb, p=float(noise_std) if noise_std > 0.5 else 0.15)
-                rec = self.dae(xb_noisy)
+                noise = torch.randn_like(xb) * float(noise_std)
+                rec = self.dae(xb + noise)
                 loss = crit(rec, xb)
                 opt.zero_grad(); loss.backward(); opt.step()
         return self
@@ -474,7 +594,7 @@ def compute_manifold_features(X_train, X_test, allow_transductive=False, k=None,
     return feats_tr, feats_te
 
 
-def build_streams(X_v, X_test_v):
+def build_streams(X_v, X_test_v, y_train=None):
     ref_fit_X = np.vstack([X_v, X_test_v]) if config.ALLOW_TRANSDUCTIVE else X_v
     ref = DataRefinery(X_v.shape[1]).fit(ref_fit_X)
 
@@ -490,21 +610,32 @@ def build_streams(X_v, X_test_v):
     emb_tr, rec_tr = ref.transform(X_v)
     emb_te, rec_te = ref.transform(X_test_v)
 
-    # [OMEGA] K-Means Features for Trees
-    # Provides "Distance to Prototype" features
-    km = KMeansFeaturizer(n_clusters=32, seed=42).fit(X_v) # 32 clusters
+    # [OMEGA] K-Means Features
+    km = KMeansFeaturizer(n_clusters=32, seed=42).fit(X_v)
     km_tr = km.transform(X_v)
     km_te = km.transform(X_test_v)
 
-    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr])
-    X_neural_te = np.hstack([X_test_v, feats_te, emb_te])
+    # [OMEGA] Supervised Features (PLS + Golden)
+    pls_tr, pls_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
+    gold_tr, gold_te = np.zeros((len(X_v), 0)), np.zeros((len(X_test_v), 0))
+
+    if y_train is not None:
+        # PLS for Neural
+        pls = PLSFeatureGen(n_components=10).fit(X_v, y_train)
+        pls_tr = pls.transform(X_v)
+        pls_te = pls.transform(X_test_v)
+        
+        # Golden for Trees
+        gold = GoldenFeatureGenerator(top_n=20).fit(X_v, y_train)
+        gold_tr = gold.transform(X_v)
+        gold_te = gold.transform(X_test_v)
+
+    X_neural_tr = np.hstack([X_v, feats_tr, emb_tr, pls_tr])
+    X_neural_te = np.hstack([X_test_v, feats_te, emb_te, pls_te])
     
-    
-    # Trees get: View + Manifold + DAE_Embedding (Effective) + KMeans
-    # Replaced 'rec' with 'emb' because Trees don't need denoised input (redundant), they need the latent structure.
-    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr])
-    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te])
-    
-    return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te
+    # Trees get: View + Manifold + DAE_Embedding + KMeans + Golden
+    # Replaced 'rec' with 'emb' (Embeddings are richer)
+    X_tree_tr = np.hstack([X_v, feats_tr, emb_tr, km_tr, gold_tr])
+    X_tree_te = np.hstack([X_test_v, feats_te, emb_te, km_te, gold_te])
     
     return X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te

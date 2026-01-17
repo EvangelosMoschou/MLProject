@@ -35,7 +35,7 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         allow_transductive=config.ALLOW_TRANSDUCTIVE,
     )
 
-    X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te = build_streams(X_v, X_test_v)
+    X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te = build_streams(X_v, X_test_v, y_train=y_enc)
     
     # [OMEGA] Diffusion Augmentation
     # Μόνο επαύξηση των training data αν δεν κάνουμε validating/stacking (Stacking χειρίζεται strict CV εσωτερικά)
@@ -175,7 +175,7 @@ def predict_probs_for_view(view, seed, X_train_base, X_test_base, y_enc, num_cla
         seed=seed,
         allow_transductive=config.ALLOW_TRANSDUCTIVE,
     )
-    X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te = build_streams(X_v, X_test_v)
+    X_tree_tr, X_tree_te, X_neural_tr, X_neural_te, lid_tr, lid_te = build_streams(X_v, X_test_v, y_train=y_enc)
     
     pseudo_X_tree = None
     pseudo_X_neural = None
