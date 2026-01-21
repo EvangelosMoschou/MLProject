@@ -1,4 +1,3 @@
-import copy
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
@@ -8,8 +7,8 @@ from scipy.optimize import nnls
 
 from . import config
 from .losses import prob_meta_features
-from .features import apply_feature_view, build_streams, GeometricFeatureGenerator, AnomalyFeatureGenerator, ConfusionScout, find_confusion_pairs, CrossFoldFeatureGenerator
-from .generative import synthesize_data
+from .features import ConfusionScout, find_confusion_pairs, CrossFoldFeatureGenerator
+from .cv_engine import UnifiedCVEngine
 from .postprocessing import neutralize_predictions, align_probabilities
 
 def tabpfn_predict_proba(X_train, y_train, X_eval, n_ensembles=32, seed=42):
@@ -134,6 +133,68 @@ def optimize_class_thresholds(oof_probs, y_true):
     return res.x
 
 
+def optimize_class_thresholds_bounded(oof_probs, y_true, bounds=(0.5, 2.0), init_boost=None):
+    """
+    Bounded per-class scaling to maximize accuracy.
+    Uses honest OOF predictions to avoid leakage.
+    """
+    from scipy.optimize import minimize
+
+    n_classes = oof_probs.shape[1]
+    low, high = float(bounds[0]), float(bounds[1])
+
+    x0 = np.ones(n_classes, dtype=np.float64)
+    if init_boost is not None:
+        for cls_idx, boost in init_boost.items():
+            if 0 <= int(cls_idx) < n_classes:
+                x0[int(cls_idx)] = float(boost)
+
+    def loss_func(w):
+        w = np.clip(w, low, high)
+        p_w = oof_probs * w
+        y_pred = np.argmax(p_w, axis=1)
+        return -np.mean(y_pred == y_true)
+
+    bounds_vec = [(low, high) for _ in range(n_classes)]
+    res = minimize(loss_func, x0=x0, method='L-BFGS-B', bounds=bounds_vec)
+    best_w = np.clip(res.x, low, high)
+    base_acc = np.mean(np.argmax(oof_probs, axis=1) == y_true)
+    best_acc = -res.fun
+    print(f"   [Thresholds] Bounded Acc {best_acc:.4f} (Base: {base_acc:.4f})")
+    return best_w
+
+
+def optimize_pairwise_correction(oof_probs, y_true, pair=(2, 5), bounds_diag=(0.5, 2.0), bounds_off=(0.0, 2.0)):
+    """Optimize a 2x2 correction matrix for a class pair to maximize accuracy."""
+    from scipy.optimize import minimize
+
+    n_classes = oof_probs.shape[1]
+    c1, c2 = int(pair[0]), int(pair[1])
+    if c1 < 0 or c2 < 0 or c1 >= n_classes or c2 >= n_classes or c1 == c2:
+        return np.eye(2, dtype=np.float64)
+
+    def apply_corr(p, m):
+        p_adj = p.copy()
+        v = p_adj[:, [c1, c2]]
+        q = v @ m.T
+        p_adj[:, c1] = q[:, 0]
+        p_adj[:, c2] = q[:, 1]
+        p_adj /= (p_adj.sum(axis=1, keepdims=True) + 1e-12)
+        return p_adj
+
+    def loss_func(x):
+        m = np.array([[x[0], x[1]], [x[2], x[3]]], dtype=np.float64)
+        p_adj = apply_corr(oof_probs, m)
+        y_pred = np.argmax(p_adj, axis=1)
+        return -np.mean(y_pred == y_true)
+
+    x0 = np.array([1.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    bounds = [bounds_diag, bounds_off, bounds_off, bounds_diag]
+    res = minimize(loss_func, x0=x0, method='L-BFGS-B', bounds=bounds)
+    best = np.array([[res.x[0], res.x[1]], [res.x[2], res.x[3]]], dtype=np.float64)
+    return best
+
+
 def ensemble_failure_analysis(preds, y_true):
     """Print diagnostics for high-confidence errors."""
     y_pred = np.argmax(preds, axis=1)
@@ -203,346 +264,23 @@ def fit_predict_stacking(
         # study.optimize(lambda trial: objective(trial, X_train_base, y), n_trials=50)
         # For now, proceeding with fixed params + Geometry.
     
-    # Transform View (Split handled inside loop usually for strict correctness, but optimization allows global transform if transductive)
-    # [FIX] Moved inside loop to prevent leakage unless transductive logic is explicitly allowed.
-    # We still need a reference for SKF split.
-    
-    for tr_idx, val_idx in skf.split(X_train_base, y):
-        # 1. SPLIT DATA (RAW)
-        X_tr_raw_fold = X_train_base[tr_idx]
-        X_val_raw_fold = X_train_base[val_idx]
-        y_tr = y[tr_idx]
-
-        # 2. APPLY VIEW & ENGINEERING (Inside Fold)
-        # Check leakage warning if transductive is ON
-        if config.ALLOW_TRANSDUCTIVE:
-             pass # Warning printed in apply_feature_view usually, or accepted risk.
-        
-        # Fit on Fold Train, Transform Fold Val & Test
-        X_tr_fold, X_val_fold = apply_feature_view(
-            X_tr_raw_fold, X_val_raw_fold, view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
-        )
-        
-        # We also need to transform the FULL Test set based on this Fold's pipeline?
-        # Standard Stacking: Use the model trained on this fold to predict on the FULL test set.
-        # But the Feature Pipeline (PCA/Quantile) needs to be consistent.
-        # Correct Approach: Fit pipeline on X_tr_raw_fold, transform X_test_base.
-        # apply_feature_view returns (X_train, X_validation/test).
-        # We need a 3-way split helper or call it twice?
-        # apply_feature_view signature: (X_train, X_test, ...)
-        
-        # Call 1: Train/Val
-        # Done above.
-        
-        # Call 2: Train/TestFull (To get X_test_view_fold consistent with this fold's scaler/pca)
-        # Re-fitting on X_tr_raw_fold is necessary.
-        _, X_test_view_fold = apply_feature_view(
-             X_tr_raw_fold, X_test_base, view=view_name, seed=seed, allow_transductive=config.ALLOW_TRANSDUCTIVE
-        )
-        
-        sw_tr = None
-        if sample_weight is not None:
-            sw_tr = sample_weight[tr_idx]
-
-        # [OMEGA] Decoupled Diffusion Augmentation
-        # 1. Augment VIEW data (for standard models)
-        X_tr_aug, y_tr_aug, sw_tr_aug = X_tr_fold, y_tr, sw_tr
-        
-        # 2. Augment RAW data (for TabPFN) - Independent Stream
-        X_tr_raw_aug, y_tr_raw_aug, sw_tr_raw_aug = X_tr_raw_fold, y_tr, sw_tr
-
-        if config.ENABLE_DIFFUSION and len(X_tr_fold) > 100:
-            print(f"   [DIFFUSION] Augmenting View stream...")
-            X_tr_aug, y_tr_aug = synthesize_data(X_tr_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
-            # Weights for view stream
-            if sw_tr is not None:
-                sw_diff = np.ones(len(y_tr_aug) - len(tr_idx), dtype=np.float32) * 0.5
-                sw_tr_aug = np.concatenate([sw_tr, sw_diff])
-            
-            # Independent Augmentation for RAW stream (if TabPFN is present)
-            # Check if any TabPFN model exists to avoid wasted compute
-            has_tabpfn = any('TabPFN' in m[0] for m in names_models)
-            if has_tabpfn:
-                 print(f"   [DIFFUSION] Augmenting Raw stream (for TabPFN)...")
-                 # We must use fresh synthesis on Raw data
-                 # Note: y_tr_raw_aug might differ in content/order from y_tr_aug due to random sampling!
-                 # This is fine as long as TabPFN uses (X_raw_aug, y_raw_aug) explicitly.
-                 X_tr_raw_aug, y_tr_raw_aug = synthesize_data(X_tr_raw_fold, y_tr, n_new_per_class=config.DIFFUSION_N_SAMPLES // 5)
-                 if sw_tr is not None:
-                    sw_diff = np.ones(len(y_tr_raw_aug) - len(tr_idx), dtype=np.float32) * 0.5
-                    sw_tr_raw_aug = np.concatenate([sw_tr, sw_diff])
-            
-            import gc; gc.collect()
-        
-        # NOTE: Updates 'X_tr_fold' to be the augmented version for build_streams?
-        # NO. build_streams expects Reference info. 
-        # Usually we build streams on the NON-augmented data (to learn manifolds correctly from real dist) 
-        # or augmented? 
-        # Existing code used 'X_tr_fold' (which was overwritten).
-        # Let's keep consistency: Feature/Manifold calculation on Real+Augmented?
-        # Computing manifold on synthetic data might be noisy.
-        # SAFE BET: Build streams on REAL data (X_tr_fold), then apply to Augmented?
-        # Complexity: The synthetic data needs features too.
-        # If we synthesized Features directly (which we did, X_tr_aug is features), then we don't need build_streams on them?
-        # Wait, 'X_tr_fold' is 'X_tr_view' (PCA/Quantile/Raw).
-        # synthesizing it gives more PCA/Quantile samples.
-        # BUT `build_streams` adds DAE/Manifold features. 
-        # If we synthesize View, we can't easily get DAE features for them unless we run DAE on synthetic views.
-        # The standard pipeline: View -> Augment -> DAE/Streams.
-        # So we should pass X_tr_aug to build_streams if we want features for them.
-        
-        # 2. BUILD STREAMS (Local)
-        # We use X_tr_aug (View Augmented) for standard models.
-        # For TabPFN, we don't use streams (it uses Raw), so we ignore streams for it.
-        X_tree_tr, X_tree_val, X_neural_tr, X_neural_val, _, _ = build_streams(X_tr_aug, X_val_fold, y_train=y_tr_aug)
-        
-        # Test streams: using X_tr_aug as reference? Or X_tr_fold (real)?
-        # Using Real data as reference for Test manifold is usually safer/better.
-        # But let's stick to X_tr_aug to match training distribution representation.
-        _, X_tree_te_fold, _, X_neural_te_fold, _, _ = build_streams(X_tr_aug, X_test_view_fold, y_train=y_tr_aug)
-        
-        # 3. PREPARE PSEUDO
-        pX_tree = None
-        pX_neural = None
-        py = pseudo_y
-        pw = pseudo_w
-        
-        if pseudo_idx is not None and len(pseudo_idx) > 0:
-            pX_tree = X_tree_te_fold[pseudo_idx]
-            pX_neural = X_neural_te_fold[pseudo_idx]
-
-        # 4. TRAIN BASE MODELS
-        for name, base_template in names_models:
-            idx_m = model_map[name]
-            
-            # Clone
-            model = copy.deepcopy(base_template)
-            
-            # Select Feature Stream
-            is_tree = ('XGB' in name or 'Cat' in name or 'LGBM' in name)
-            is_tabpfn = 'TabPFN' in name
-            is_svm = getattr(base_template, '_is_svm', False) or 'SVM' in name
-            
-            # TabPFN: Use RAW data only? 
-            # [CRITICAL FIX] When Diffusion is ON, X_train_raw is NOT augmented, but y_tr IS augmented.
-            # We MUST use the augmented stream (X_f_tr) to match dimensions.
-            # The "Raw" bypass is only valid if no augmentation happens.
-            # if is_tabpfn and X_train_raw is not None:
-            #     X_f_tr = X_train_raw[tr_idx]
-            #     X_f_val = X_train_raw[val_idx]
-            #     X_f_te = X_test_raw
-            #     pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
-            # else:
-            
-            # SVM: Use view-only features (no manifold streams - SVM struggles with high-dim)
-            if is_svm:
-                X_f_tr = X_tr_aug  # SVM uses View Aug
-                y_tr_eff_model = y_tr_aug
-                sw_tr_eff_model = sw_tr_aug
-                
-                X_f_val = X_val_fold # Val is always Real
-                X_f_te = X_test_view_fold
-                pX_f = X_test_view_fold[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
-            
-            # TabPFN: Use RAW AUG logic
-            elif is_tabpfn:
-                # TabPFN uses Independent Raw Augmentation stream
-                X_f_tr = X_tr_raw_aug
-                y_tr_eff_model = y_tr_raw_aug
-                sw_tr_eff_model = sw_tr_raw_aug
-                
-                # Val/Test must be RAW Real
-                X_f_val = X_val_raw_fold
-                X_f_te = X_test_raw # Full Test Raw
-                pX_f = X_test_raw[pseudo_idx] if (pseudo_idx is not None and len(pseudo_idx) > 0) else None
-                
-                # [OMEGA] TabPFN Geometry + Anomaly Injection
-                # Explicitly compute Centroid Distances + Anomalies on RAW Data
-                geo = GeometricFeatureGenerator().fit(X_tr_raw_aug, y_tr_raw_aug)
-                anom = AnomalyFeatureGenerator().fit(X_tr_raw_aug)
-                
-                g_tr = np.hstack([geo.transform(X_tr_raw_aug), anom.transform(X_tr_raw_aug)])
-                g_val = np.hstack([geo.transform(X_val_raw_fold), anom.transform(X_val_raw_fold)])
-                g_te = np.hstack([geo.transform(X_test_raw), anom.transform(X_test_raw)])
-                if pX_f is not None: 
-                    gp = np.hstack([geo.transform(pX_f), anom.transform(pX_f)])
-                
-                pass # Just ensuring indentation
-                
-                X_f_tr = np.hstack([X_f_tr, g_tr])
-                X_f_val = np.hstack([X_f_val, g_val])
-                X_f_te = np.hstack([X_f_te, g_te])
-                if pX_f is not None: pX_f = np.hstack([pX_f, gp])
-                
-            else:
-                # Standard Tree/Neural Streams (Built from X_tr_aug)
-                X_f_tr = X_tree_tr if is_tree else X_neural_tr
-                y_tr_eff_model = y_tr_aug
-                sw_tr_eff_model = sw_tr_aug
-                
-                X_f_val = X_tree_val if is_tree else X_neural_val
-                X_f_te = X_tree_te_fold if is_tree else X_neural_te_fold
-                pX_f = pX_tree if is_tree else pX_neural
-            
-            # Concatenate Pseudo if active
-            X_train_final = X_f_tr
-            y_train_final = y_tr_eff_model
-            w_train_final = sw_tr_eff_model
-            
-            if pX_f is not None:
-                # Handle Concatenation & Label Types
-                is_pseudo_soft = (py.ndim > 1) or np.issubdtype(py.dtype, np.floating)
-                is_tabpfn = 'TabPFN' in name  # TabPFN requires HARD labels only
-                is_torch = hasattr(model, 'finetune_on_pseudo') and not is_tabpfn
-                
-                y_tr_eff = y_train_final
-                py_eff = py
-                
-                # TabPFN & Trees: Hard Labels (TabPFN doesn't support soft labels)
-                if is_pseudo_soft and (not is_torch or is_tabpfn):
-                    if py.ndim > 1: py_eff = np.argmax(py, axis=1).astype(np.int64)
-                    else: py_eff = py.astype(np.int64)
-                elif is_pseudo_soft and is_torch:
-                    # Torch models (TrueTabR): Soft Labels
-                    if y_tr_eff.ndim == 1:
-                        y_tr_eff = np.eye(num_classes, dtype=np.float32)[y_tr_eff]
-                
-                X_train_final = np.vstack([X_f_tr, pX_f])
-                
-                # Shape matching for Y
-                if y_train_final.ndim == 1 and py_eff.ndim == 1:
-                    y_train_final = np.concatenate([y_tr_eff, py_eff])
-                else:
-                    if y_tr_eff.ndim == 1: y_tr_eff = y_tr_eff[:, None]
-                    if py_eff.ndim == 1: py_eff = py_eff[:, None]
-                    y_train_final = np.vstack([y_tr_eff, py_eff])
-                    if y_train_final.shape[1] == 1: y_train_final = y_train_final.ravel()
-                
-                # Weights
-                w_tr_base = w_train_final if w_train_final is not None else np.ones(len(y_tr), dtype=np.float32)
-                
-                # [OMEGA] Confusion Weighting (Focus on 2 vs 5)
-                # Boost weights for classes that Scout identified as hard
-                if config.CONFUSION_WEIGHT_MULTIPLIER > 1.0:
-                    # We can use the 'meta_pairs' we detected earlier or re-detect
-                    # Re-detecting on current fold is safer
-                    fold_pairs = find_confusion_pairs(X_tr_raw_fold, y_tr, top_k=1, seed=seed)
-                    for (c_a, c_b) in fold_pairs:
-                        # y_tr_eff is the effective label (potentially augmented or pseudo).
-                        # Ideally we weight the actual Training target.
-                        # y_tr_eff should match w_tr_base length.
-                        mask_conf = (y_tr_eff == c_a) | (y_tr_eff == c_b)
-                        
-                        # Safety check for lengths
-                        if mask_conf.shape[0] == w_tr_base.shape[0]:
-                             w_tr_base[mask_conf] *= config.CONFUSION_WEIGHT_MULTIPLIER
-                             # print(f"    [Weighting] Boosted weights for Class {c_a} & {c_b} (x{config.CONFUSION_WEIGHT_MULTIPLIER})") # Silence spam
-                        else:
-                             # Mismatch (e.g. y_tr_eff is augmented, w_tr_base is not?)
-                             # usually w_tr_base matches y_tr_eff.
-                             pass
-
-                w_p_base = pw if pw is not None else np.ones(len(py), dtype=np.float32)
-                w_train_final = np.concatenate([w_tr_base, w_p_base]) 
-
-            # FIT
-            try:
-                model.fit(X_train_final, y_train_final, sample_weight=w_train_final)
-            except TypeError:
-                model.fit(X_train_final, y_train_final)
-            
-            # OOF & TEST PREDICT
-            p_oof = model.predict_proba(X_f_val).astype(np.float32)
-            oof_preds[idx_m][val_idx] = p_oof
-            
-            p_test = model.predict_proba(X_f_te).astype(np.float32)
-            test_preds_running[idx_m] += p_test
-            
-            # [MEMORY FIX] Aggressively free GPU memory after each model
-            del model
-            import gc
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-        # --- MEMORY CLEANUP PER FOLD ---
-        # Crucial for preventing OOM when using Diffusion + Manifold features
-        try:
-            del X_train_aug
-        except NameError:
-            pass
-        
-        # Explicitly delete fold tensors/arrays
-        del X_train_final, y_train_final, w_train_final
-        if 'X_tr_fold' in locals(): del X_tr_fold
-        if 'X_val_fold' in locals(): del X_val_fold
-        
-        # Stream deletion
-        try:
-             del X_tree_tr, X_tree_val, X_neural_tr, X_neural_val
-             del X_f_tr, X_f_val, X_f_te
-        except:
-             pass
-             
-        # Clear model specific vars
-        try:
-            del model, p_oof, p_test
-        except:
-            pass
-
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    # Average Test Predictions
-    for i in range(n_models):
-        test_preds_running[i] /= cv_splits
-
-    # >>> OVERFITTING DIAGNOSTIC REPORT <<<
-    print("\n  ╔══════════════════════════════════════════════════════════════╗")
-    print("  ║              OVERFITTING DIAGNOSTIC REPORT                   ║")
-    print("  ╠══════════════════════════════════════════════════════════════╣")
-    
-    model_names = [name for name, _ in names_models]
-    oof_accuracies = []
-    
-    for idx_m, name in enumerate(model_names):
-        oof_pred_labels = np.argmax(oof_preds[idx_m], axis=1)
-        oof_acc = (oof_pred_labels == y).mean() * 100
-        oof_accuracies.append(oof_acc)
-        
-        # Overfitting indicator: if OOF acc is suspiciously high (>98%) or has high variance
-        flag = ""
-        if oof_acc > 98:
-            flag = " ⚠️ SUSPICIOUS (too high)"
-        elif oof_acc < 70:
-            flag = " ⚠️ UNDERFITTING"
-        
-        print(f"  ║  {name:<20} OOF Accuracy: {oof_acc:6.2f}%{flag:<20}║")
-    
-    # Ensemble OOF (average of all models)
-    ensemble_oof = np.mean([oof_preds[i] for i in range(len(oof_preds))], axis=0)
-    ensemble_oof_labels = np.argmax(ensemble_oof, axis=1)
-    ensemble_oof_acc = (ensemble_oof_labels == y).mean() * 100
-    
-    print("  ╠══════════════════════════════════════════════════════════════╣")
-    print(f"  ║  {'ENSEMBLE OOF':<20} Accuracy: {ensemble_oof_acc:6.2f}%                   ║")
-    print("  ╠══════════════════════════════════════════════════════════════╣")
-    
-    # Compare best single model vs ensemble
-    best_single = max(oof_accuracies)
-    ensemble_gain = ensemble_oof_acc - best_single
-    if ensemble_gain > 0:
-        print(f"  ║  Ensemble Gain: +{ensemble_gain:.2f}% over best single model          ║")
-    else:
-        print(f"  ║  ⚠️ Ensemble WORSE than best single by {-ensemble_gain:.2f}%            ║")
-    
-    # Overfitting warning
-    if ensemble_oof_acc > 95:
-        print("  ║  ⚠️ WARNING: OOF acc >95% may indicate data leakage!         ║")
-    
-    print("  ╚══════════════════════════════════════════════════════════════╝\n")
+    engine = UnifiedCVEngine(
+        names_models=names_models,
+        view_name=view_name,
+        X_train_base=X_train_base,
+        X_test_base=X_test_base,
+        y=y,
+        num_classes=num_classes,
+        cv_splits=cv_splits,
+        seed=seed,
+        sample_weight=sample_weight,
+        pseudo_idx=pseudo_idx,
+        pseudo_y=pseudo_y,
+        pseudo_w=pseudo_w,
+        X_train_raw=X_train_raw,
+        X_test_raw=X_test_raw,
+    )
+    oof_preds, test_preds_running = engine.run()
 
     # --- META LEARNER ---
     meta_X = np.hstack(oof_preds)
@@ -572,27 +310,55 @@ def fit_predict_stacking(
     # Concatenate: [Ensemble Probs] + [Meta Stats] + [Scout Expert Opinion]
     meta_X = np.hstack([meta_X] + meta_feat_oof + [scout_oof])
     meta_te = np.hstack([meta_te] + meta_feat_te + [scout_te])
-    
+
+    mode = config.META_LEARNER
+
+    def _meta_predict_proba(model, X_eval):
+        if hasattr(model, 'predict_proba'):
+            return model.predict_proba(X_eval)
+        d = model.decision_function(X_eval)
+        e_d = np.exp(d - np.max(d, axis=1, keepdims=True))
+        return e_d / e_d.sum(axis=1, keepdims=True)
+
+    def _build_meta_model(mode_name, seed_val):
+        if mode_name == 'lr':
+            return LogisticRegression(C=0.55, random_state=seed_val, solver='lbfgs', max_iter=1000)
+        if mode_name == 'ridge':
+            return RidgeClassifier(alpha=1.0, random_state=seed_val)
+        if mode_name == 'lgbm':
+            from lightgbm import LGBMClassifier
+            return LGBMClassifier(
+                n_estimators=config.LGBM_N_ESTIMATORS,
+                num_leaves=config.LGBM_NUM_LEAVES,
+                max_depth=config.LGBM_MAX_DEPTH,
+                min_child_samples=20,
+                class_weight='balanced',
+                random_state=seed_val,
+                verbose=-1,
+            )
+        raise ValueError(f"Unsupported meta mode: {mode_name}")
+
+    nested_meta_oof = None
+    if mode in ['lr', 'ridge', 'lgbm']:
+        print("  [Meta] Nested CV for threshold tuning...")
+        nested_meta_oof = np.zeros((len(y), num_classes), dtype=np.float32)
+        meta_skf = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=seed)
+        for tr_idx, val_idx in meta_skf.split(meta_X, y):
+            meta_cv = _build_meta_model(mode, seed)
+            meta_cv.fit(meta_X[tr_idx], y[tr_idx])
+            nested_meta_oof[val_idx] = _meta_predict_proba(meta_cv, meta_X[val_idx])
+
     # Store OOF Aggregation for Threshold Tuning
-    # Simple average for base threshold tuning? Or just use meta output?
-    # If meta-learner is used, its output (on train set via cross-val?) is complex.
-    # Stacking usually doesn't output 'train' preds.
-    # We can use the weighted average of OOF predictions as a proxy for "Ensemble OOF".
-    if mode == 'hill_climb':
-         # weights already computed.
-         oof_meta = np.zeros_like(oof_preds[0])
-         for m_i in range(len(oof_preds)):
+    if nested_meta_oof is not None:
+        oof_meta = nested_meta_oof
+    elif mode == 'hill_climb':
+        oof_meta = np.zeros_like(oof_preds[0])
+        for m_i in range(len(oof_preds)):
             oof_meta += oof_preds[m_i] * weights[m_i]
     elif mode in ['rank', 'geo']:
-        # recalculate based on mode
-        if mode == 'rank': oof_meta = rank_average(oof_preds)
-        else: oof_meta = geometric_mean(oof_preds)
+        oof_meta = rank_average(oof_preds) if mode == 'rank' else geometric_mean(oof_preds)
     else:
-        # For LR/LGBM, we need to cross-val PREDICT on meta_X to get "OOF of Meta".
-        # This is nested stacking. Too complex/expensive.
-        # Fallback: Just use Hill Climb weights or Simple Average for threshold tuning base.
-        # OR: Just use simple average of OOFs.
-        print("  [Thresholds] Using Simple Average OOF for threshold learning (Meta is complex).")
+        print("  [Thresholds] Using Simple Average OOF for threshold learning.")
         oof_meta = np.mean(oof_preds, axis=0)
 
     # Return OOF for Tuning
@@ -600,27 +366,22 @@ def fit_predict_stacking(
         return oof_preds, test_preds_running, meta_X, meta_te, y
 
     # Meta Optimization
-    mode = config.META_LEARNER
     print(f"  > Fitting Meta-Learner ({mode})...")
     
     if mode == 'lr':
-        # Optimal C=0.55 from Optuna tuning (87.20% CV accuracy, 3030 trials)
-        meta = LogisticRegression(C=0.55, random_state=seed, solver='lbfgs', max_iter=1000)
+        meta = _build_meta_model(mode, seed)
         meta.fit(meta_X, y)
-        final_probs = meta.predict_proba(meta_te)
+        final_probs = _meta_predict_proba(meta, meta_te)
         
     elif mode == 'ridge':
-        meta = RidgeClassifier(alpha=1.0, random_state=seed)
+        meta = _build_meta_model(mode, seed)
         meta.fit(meta_X, y)
-        d = meta.decision_function(meta_te)
-        e_d = np.exp(d - np.max(d, axis=1, keepdims=True))
-        final_probs = e_d / e_d.sum(axis=1, keepdims=True)
+        final_probs = _meta_predict_proba(meta, meta_te)
 
     elif mode == 'lgbm':
-        from lightgbm import LGBMClassifier
-        meta = LGBMClassifier(n_estimators=100, num_leaves=15, max_depth=3, random_state=seed, verbose=-1)
+        meta = _build_meta_model(mode, seed)
         meta.fit(meta_X, y)
-        final_probs = meta.predict_proba(meta_te)
+        final_probs = _meta_predict_proba(meta, meta_te)
         
     elif mode == 'hill_climb':
         print("  [Meta] Using Hill Climbing Optimization (Accuracy)...")
@@ -655,10 +416,26 @@ def fit_predict_stacking(
         for m_i in range(n_base_models):
             final_probs += test_preds_running[m_i] * weights[m_i]
     
-    # [OMEGA] Threshold Optimization (Pre-Post-Processing)
-    # Learn on OOF, apply to Test
-    thresh_w = optimize_class_thresholds(oof_meta, y)
+    # [OMEGA] Honest Threshold Optimization (Pre-Post-Processing)
+    # Learn on honest OOF, apply to Test with bounded scaling
+    init_boost = {2: 1.1, 5: 1.1}  # Known confusion pair emphasis
+    thresh_w = optimize_class_thresholds_bounded(
+        oof_meta,
+        y,
+        bounds=(0.5, 2.0),
+        init_boost=init_boost,
+    )
     final_probs = final_probs * thresh_w
+    final_probs /= final_probs.sum(axis=1, keepdims=True)
+
+    oof_scaled = oof_meta * thresh_w
+    oof_scaled /= (oof_scaled.sum(axis=1, keepdims=True) + 1e-12)
+    pair_matrix = optimize_pairwise_correction(oof_scaled, y, pair=(2, 5))
+    pair_c1, pair_c2 = 2, 5
+    pair_block = final_probs[:, [pair_c1, pair_c2]]
+    pair_block = pair_block @ pair_matrix.T
+    final_probs[:, pair_c1] = pair_block[:, 0]
+    final_probs[:, pair_c2] = pair_block[:, 1]
     final_probs /= final_probs.sum(axis=1, keepdims=True)
 
     # [OMEGA] Post-Processing (The Silencer & The Equalizer)

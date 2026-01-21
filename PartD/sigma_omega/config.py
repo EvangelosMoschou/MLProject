@@ -54,7 +54,7 @@ TUNE_HYPERPARAMS = _env_bool('TUNE_HYPERPARAMS', False) # Enable Optuna optimiza
 
 # Stacking enhancements (opt-in)
 # META_LEARNER tuned via Optuna (3030 trials): LR(C=0.55) = 87.20% > Ridge(86.96%) > NNLS(82.39%)
-META_LEARNER = os.getenv('META_LEARNER', 'lr').strip().lower()  # lr | lgbm | ridge | nnls
+META_LEARNER = os.getenv('META_LEARNER', 'lgbm').strip().lower()  # lr | lgbm | ridge | nnls
 USE_TABPFN = _env_bool('USE_TABPFN', True)  # Enabled: adds diversity to ensemble
 TABPFN_N_ENSEMBLES = _env_int('TABPFN_N_ENSEMBLES', 64)  # v2.5 supports higher ensembles
 TABPFN_MAX_TIME = _env_int('TABPFN_MAX_TIME', 60) # Fast Production: 60s per fit (OOF used 300s)
@@ -63,7 +63,7 @@ LGBM_NUM_LEAVES = _env_int('LGBM_NUM_LEAVES', 31)
 LGBM_N_ESTIMATORS = _env_int('LGBM_N_ESTIMATORS', 400)
 
 # Adversarial validation reweighting (opt-in)
-ENABLE_ADV_REWEIGHT = _env_bool('ENABLE_ADV_REWEIGHT', False)
+ENABLE_ADV_REWEIGHT = _env_bool('ENABLE_ADV_REWEIGHT', True)
 ADV_MODEL = os.getenv('ADV_MODEL', 'lr').strip().lower()  # lr | xgb
 ADV_CLIP = _env_float('ADV_CLIP', 10.0)
 ADV_POWER = _env_float('ADV_POWER', 1.0)
@@ -103,7 +103,7 @@ ENABLE_LAPLACIAN = _env_bool('ENABLE_LAPLACIAN', False)  # Disabled for speed & 
 USE_GPU_EIGENMAPS = _env_bool('USE_GPU_EIGENMAPS', True)  # GPU acceleration for Laplacian
 ENABLE_DIFFUSION = _env_bool('ENABLE_DIFFUSION', True)  # Diffusion augmentation per-fold
 DIFFUSION_N_SAMPLES = _env_int('DIFFUSION_N_SAMPLES', 1000)  # Synthetic samples per fold
-ENABLE_RAZOR = _env_bool('ENABLE_RAZOR', True)  # Enable Razor feature selection
+ENABLE_RAZOR = _env_bool('ENABLE_RAZOR', False)  # Disable Razor feature selection by default
 
 # LID temperature scaling (opt-in)
 ENABLE_LID_SCALING = _env_bool('ENABLE_LID_SCALING', False)

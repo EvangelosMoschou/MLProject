@@ -121,6 +121,14 @@ MLProject/
 ├── README.md                    # Αυτό το αρχείο
 ├── walkthrough.md               # Λεπτομερής περιγραφή
 └── requirements.txt             # Python dependencies
+
+## Unified CV Engine (Smoke Check)
+
+Για γρήγορο έλεγχο ότι ο Unified CV engine φορτώνει σωστά:
+
+```bash
+python3 PartD/sigma_omega/runners/run_cv_engine_smoke.py
+```
 ```
 
 ## Αποτελέσματα
